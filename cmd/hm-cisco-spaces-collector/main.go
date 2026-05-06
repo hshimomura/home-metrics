@@ -387,7 +387,7 @@ func (p *processor) extractValues(mac string, item telemetry) []metricValue {
 		values = append(values, metricValue{Metric: metricBattery, Value: item.Battery.Value})
 	}
 	if item.TVOC != nil {
-		values = append(values, metricValue{Metric: metricETVOC, Value: item.TVOC.ValueInPPB})
+		values = append(values, metricValue{Metric: metricETVOC, Value: item.TVOC.ValueInPPB / 1000})
 	}
 	return values
 }

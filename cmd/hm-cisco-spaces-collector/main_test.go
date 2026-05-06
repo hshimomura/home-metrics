@@ -80,7 +80,7 @@ func TestProcessEventParsesReferenceShape(t *testing.T) {
 			"carbonEmissions": {"co2Ppm": 550},
 			"illuminance": {"unit": "LUX", "value": 123},
 			"battery": {"value": 98},
-			"tvoc": {"valueInPpb": 7}
+			"tvoc": {"valueInPpb": 7000}
 		}
 	}`
 	var event firehoseEvent

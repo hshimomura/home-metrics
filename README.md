@@ -220,7 +220,9 @@ CISCO_SPACES_PRUNE_CONFIGURED_BLE_SENSORS
 
 collector は `X-API-Key` header で Firehose に接続し、stream が切れた場合は
 exponential backoff で再接続します。温度、湿度、気圧、CO2、照度、battery、TVOC
-は 5 sample median を使い、既知の sentinel 値は保存しません。
+は 5 sample median を使い、既知の sentinel 値は保存しません。Firehose の
+`tvoc.valueInPpb` は既存BLE importer の eTVOC と同じ表示単位に合わせるため
+1000 で割って保存します。
 `CISCO_SPACES_PRUNE_CONFIGURED_BLE_SENSORS=true` の場合、起動時に
 `BLE_SENSORS_FILE` の静的BLEセンサーを `devices` から外します。時系列データや
 alert rule がない行は削除し、残す必要がある行は `enabled=false` にします。
