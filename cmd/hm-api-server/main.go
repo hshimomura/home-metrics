@@ -93,6 +93,8 @@ type iosDeviceResponse struct {
 	APNSEnvironment string     `json:"apns_environment"`
 	DeviceName      *string    `json:"device_name,omitempty"`
 	Enabled         bool       `json:"enabled"`
+	DisabledReason  *string    `json:"disabled_reason,omitempty"`
+	DisabledAt      *time.Time `json:"disabled_at,omitempty"`
 	LastSeenAt      *time.Time `json:"last_seen_at,omitempty"`
 	CreatedAt       time.Time  `json:"created_at"`
 	UpdatedAt       time.Time  `json:"updated_at"`
@@ -922,6 +924,8 @@ func (api *apiServer) handleIOSDevices(w http.ResponseWriter, r *http.Request) {
 			apns_environment,
 			device_name,
 			enabled,
+			disabled_reason,
+			disabled_at,
 			last_seen_at,
 			created_at,
 			updated_at
@@ -975,6 +979,8 @@ func (api *apiServer) handleRegisterIOSDevice(w http.ResponseWriter, r *http.Req
 			user_id = EXCLUDED.user_id,
 			device_name = EXCLUDED.device_name,
 			enabled = EXCLUDED.enabled,
+			disabled_reason = CASE WHEN EXCLUDED.enabled THEN NULL ELSE ios_devices.disabled_reason END,
+			disabled_at = CASE WHEN EXCLUDED.enabled THEN NULL ELSE ios_devices.disabled_at END,
 			last_seen_at = now(),
 			updated_at = now()
 		RETURNING
@@ -985,6 +991,8 @@ func (api *apiServer) handleRegisterIOSDevice(w http.ResponseWriter, r *http.Req
 			apns_environment,
 			device_name,
 			enabled,
+			disabled_reason,
+			disabled_at,
 			last_seen_at,
 			created_at,
 			updated_at
@@ -1018,6 +1026,8 @@ func (api *apiServer) handleUpdateIOSDevice(w http.ResponseWriter, r *http.Reque
 			apns_environment = $5,
 			device_name = $6,
 			enabled = $7,
+			disabled_reason = CASE WHEN $7 THEN NULL ELSE disabled_reason END,
+			disabled_at = CASE WHEN $7 THEN NULL ELSE disabled_at END,
 			last_seen_at = now(),
 			updated_at = now()
 		WHERE id = $1 AND user_id = $2
@@ -1029,6 +1039,8 @@ func (api *apiServer) handleUpdateIOSDevice(w http.ResponseWriter, r *http.Reque
 			apns_environment,
 			device_name,
 			enabled,
+			disabled_reason,
+			disabled_at,
 			last_seen_at,
 			created_at,
 			updated_at
@@ -1189,6 +1201,8 @@ func scanAlertRule(row scanner) (alertRuleResponse, error) {
 func scanIOSDevice(row scanner) (iosDeviceResponse, error) {
 	var device iosDeviceResponse
 	var deviceName pgtype.Text
+	var disabledReason pgtype.Text
+	var disabledAt pgtype.Timestamptz
 	var lastSeenAt pgtype.Timestamptz
 	if err := row.Scan(
 		&device.ID,
@@ -1198,6 +1212,8 @@ func scanIOSDevice(row scanner) (iosDeviceResponse, error) {
 		&device.APNSEnvironment,
 		&deviceName,
 		&device.Enabled,
+		&disabledReason,
+		&disabledAt,
 		&lastSeenAt,
 		&device.CreatedAt,
 		&device.UpdatedAt,
@@ -1206,6 +1222,12 @@ func scanIOSDevice(row scanner) (iosDeviceResponse, error) {
 	}
 	if deviceName.Valid {
 		device.DeviceName = &deviceName.String
+	}
+	if disabledReason.Valid {
+		device.DisabledReason = &disabledReason.String
+	}
+	if disabledAt.Valid {
+		device.DisabledAt = &disabledAt.Time
 	}
 	if lastSeenAt.Valid {
 		device.LastSeenAt = &lastSeenAt.Time

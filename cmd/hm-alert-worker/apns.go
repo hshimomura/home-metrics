@@ -215,7 +215,7 @@ func (n *apnsNotifier) send(ctx context.Context, db *pgx.Conn, target iosTarget,
 	apnsErr := apnsErrorResponse{}
 	_ = json.Unmarshal(responseBody, &apnsErr)
 	if response.StatusCode == http.StatusGone || apnsErr.Reason == "BadDeviceToken" || apnsErr.Reason == "Unregistered" {
-		if err := n.disableTarget(ctx, db, target.ID); err != nil {
+		if err := n.disableTarget(ctx, db, target.ID, apnsDisableReason(response.StatusCode, apnsErr.Reason)); err != nil {
 			return fmt.Errorf("APNs status=%d reason=%s; disable token: %w", response.StatusCode, apnsErr.Reason, err)
 		}
 	}
@@ -225,12 +225,15 @@ func (n *apnsNotifier) send(ctx context.Context, db *pgx.Conn, target iosTarget,
 	return fmt.Errorf("APNs status=%d body=%s", response.StatusCode, strings.TrimSpace(string(responseBody)))
 }
 
-func (n *apnsNotifier) disableTarget(ctx context.Context, db *pgx.Conn, id int64) error {
+func (n *apnsNotifier) disableTarget(ctx context.Context, db *pgx.Conn, id int64, reason string) error {
 	_, err := db.Exec(ctx, `
 		UPDATE ios_devices
-		SET enabled = false, updated_at = now()
+		SET enabled = false,
+			disabled_reason = $2,
+			disabled_at = now(),
+			updated_at = now()
 		WHERE id = $1
-	`, id)
+	`, id, reason)
 	return err
 }
 
@@ -278,6 +281,13 @@ func apnsHost(environment string) string {
 		return apnsProductionHost
 	}
 	return apnsSandboxHost
+}
+
+func apnsDisableReason(statusCode int, reason string) string {
+	if reason != "" {
+		return reason
+	}
+	return fmt.Sprintf("APNs status=%d", statusCode)
 }
 
 func alertBody(rule alertRule, value latestValue) string {
