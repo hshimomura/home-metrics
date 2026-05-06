@@ -1,0 +1,21 @@
+[Unit]
+Description=ECHONET Lite energy collector
+After=postgresql.service network-online.target
+Wants=postgresql.service network-online.target
+
+[Service]
+Type=simple
+User=home_metrics
+Group=home_metrics
+WorkingDirectory=/var/lib/home-metrics
+Environment=ECHONET_LOCAL_ADDR=:3610
+Environment=ECHONET_DEVICE_KEY=echonet-device
+Environment=ECHONET_POLL_INTERVAL=60s
+Environment=ECHONET_REQUEST_TIMEOUT=3s
+EnvironmentFile=-/etc/home-metrics/home-metrics.env
+ExecStart=/usr/local/bin/hm-echonet-collector
+Restart=always
+RestartSec=10s
+
+[Install]
+WantedBy=multi-user.target

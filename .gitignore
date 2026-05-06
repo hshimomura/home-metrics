@@ -1,0 +1,31 @@
+# Go/local build artifacts
+/.cache/
+/.gitstore/
+/build/
+
+# Legacy root-level binaries from before build/ became the output directory.
+/ble-collector
+/db-check
+/alert-worker
+/api-server
+/db-maint
+/nature-remo-collector
+/apcupsd-collector
+/energy-influx-import
+/echonet-collector
+/bin/
+/dist/
+*.test
+coverage.out
+
+# Local runtime/log scratch
+.env/
+
+
+*.jsonl
+*.csv
+ble-scan.jsonl
+*.log
+.vscode/settings.json
+influx-import
+tools/__pycache__/*

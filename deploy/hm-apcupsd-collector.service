@@ -1,0 +1,22 @@
+[Unit]
+Description=APC UPS apcupsd energy collector
+After=postgresql.service network-online.target
+Wants=postgresql.service network-online.target
+
+[Service]
+Type=simple
+User=home_metrics
+Group=home_metrics
+WorkingDirectory=/var/lib/home-metrics
+Environment=APCUPSD_SERVER=tcp://127.0.0.1:3551
+Environment=APCUPSD_INTERVAL=60s
+Environment=APCUPSD_DEVICE_KEY=ups
+Environment="APCUPSD_LABEL=APC UPS"
+Environment=APCUPSD_LOCATION=
+EnvironmentFile=-/etc/home-metrics/home-metrics.env
+ExecStart=/usr/local/bin/hm-apcupsd-collector
+Restart=always
+RestartSec=10s
+
+[Install]
+WantedBy=multi-user.target

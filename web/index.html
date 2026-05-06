@@ -1,0 +1,628 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>BLE Sensors</title>
+  <style>
+    :root { color-scheme: light dark; font-family: system-ui, sans-serif; }
+    body { margin: 0; background: #f6f7f8; color: #202124; }
+    main { max-width: 1120px; margin: 0 auto; padding: 24px; }
+    header { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 20px; }
+    h1 { font-size: 24px; margin: 0; }
+    h2 { font-size: 17px; margin: 0 0 12px; }
+    section { margin: 20px 0; }
+    table { width: 100%; border-collapse: collapse; background: #fff; border: 1px solid #d9dee3; }
+    th, td { padding: 9px 10px; border-bottom: 1px solid #e4e7eb; text-align: left; font-size: 14px; }
+    th { background: #eef1f4; font-weight: 650; }
+    tr:last-child td { border-bottom: 0; }
+    .toolbar { display: flex; gap: 8px; align-items: center; }
+    .detail-toolbar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+    .metric-controls { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+    input { padding: 7px 8px; border: 1px solid #b8c0c8; border-radius: 6px; min-width: 240px; }
+    select { padding: 7px 8px; border: 1px solid #b8c0c8; border-radius: 6px; background: #fff; }
+    button { padding: 8px 12px; border: 1px solid #7c8a97; border-radius: 6px; background: #fff; cursor: pointer; }
+    button:hover { background: #eef1f4; }
+    .link-button { border: 0; padding: 0; background: transparent; color: #0b57d0; font: inherit; text-align: left; }
+    .link-button:hover { background: transparent; text-decoration: underline; }
+    .metric-button { min-width: 44px; }
+    .metric-button[aria-pressed="true"] { background: #dbeafe; border-color: #3b82f6; color: #0f3f89; }
+    .chart-wrap { position: relative; height: 320px; border: 1px solid #d9dee3; background: #fff; }
+    canvas { display: block; width: 100%; height: 100%; }
+    .chart-tooltip { position: absolute; pointer-events: none; display: none; padding: 6px 8px; border: 1px solid #c7ced6; border-radius: 6px; background: rgba(255, 255, 255, 0.96); color: #202124; font-size: 12px; box-shadow: 0 2px 8px rgba(32, 33, 36, 0.18); }
+    .muted { color: #5f6b76; font-size: 13px; }
+    .error { color: #a61b1b; }
+    @media (prefers-color-scheme: dark) {
+      body { background: #151719; color: #e8eaed; }
+      table { background: #1f2327; border-color: #363c42; }
+      th, td { border-bottom-color: #30363d; }
+      th { background: #2a3036; }
+      input, select, button { background: #1f2327; color: #e8eaed; border-color: #4b5560; }
+      button:hover { background: #2a3036; }
+      .link-button { background: transparent; color: #8ab4f8; }
+      .link-button:hover { background: transparent; }
+      .metric-button[aria-pressed="true"] { background: #17325f; border-color: #60a5fa; color: #dbeafe; }
+      .chart-wrap { background: #1f2327; border-color: #363c42; }
+      .chart-tooltip { background: rgba(31, 35, 39, 0.96); color: #e8eaed; border-color: #4b5560; }
+      .muted { color: #a8b0b8; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <div>
+        <h1>BLE Sensors</h1>
+        <div class="muted" id="status">Loading</div>
+      </div>
+      <div class="toolbar">
+        <input id="token" type="password" placeholder="API token">
+        <button id="refresh">Refresh</button>
+      </div>
+    </header>
+
+    <section>
+      <h2>Devices</h2>
+      <table>
+        <thead><tr><th>MAC</th><th>Label</th><th>Type</th><th>Latest</th><th>Temperature</th><th>Humidity</th><th>Battery</th><th>Lux</th><th>CO2</th></tr></thead>
+        <tbody id="devices"></tbody>
+      </table>
+    </section>
+
+    <section id="sensor-detail">
+      <div class="detail-toolbar">
+        <div>
+          <h2 id="detail-title">Sensor Detail</h2>
+          <div class="muted" id="detail-status">Select a sensor key to show the 1d graph.</div>
+        </div>
+        <div class="metric-controls" id="metric-controls"></div>
+      </div>
+      <div class="chart-wrap">
+        <canvas id="sensor-chart" aria-label="Sensor 1 day chart"></canvas>
+        <div class="chart-tooltip" id="chart-tooltip"></div>
+      </div>
+    </section>
+
+    <section>
+      <h2>Alert Rules</h2>
+      <table>
+        <thead><tr><th>ID</th><th>MAC</th><th>Metric</th><th>Condition</th><th>Cooldown</th><th>Last Notified</th><th>Enabled</th><th>Last Value</th><th>Action</th></tr></thead>
+        <tbody id="rules"></tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>iOS Devices</h2>
+      <table>
+        <thead><tr><th>ID</th><th>Name</th><th>Bundle</th><th>Environment</th><th>Enabled</th><th>Last Seen</th><th>Updated</th><th>Token</th><th>Action</th></tr></thead>
+        <tbody id="ios-devices"></tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>Energy</h2>
+      <table>
+        <thead><tr><th>Device</th><th>Source</th><th>Metric</th><th>Value</th><th>Unit</th><th>Latest</th></tr></thead>
+        <tbody id="energy"></tbody>
+      </table>
+    </section>
+
+    <section id="energy-detail">
+      <div class="detail-toolbar">
+        <div>
+          <h2 id="energy-detail-title">Energy Detail</h2>
+          <div class="muted" id="energy-detail-status">Select an energy device or metric to show the 1d graph.</div>
+        </div>
+      </div>
+      <div class="chart-wrap">
+        <canvas id="energy-chart" aria-label="Energy 1 day chart"></canvas>
+        <div class="chart-tooltip" id="energy-chart-tooltip"></div>
+      </div>
+    </section>
+
+    <section>
+      <div class="detail-toolbar">
+        <h2>Notification Events</h2>
+        <button id="clear-events">Clear history</button>
+      </div>
+      <table>
+        <thead><tr><th>Time</th><th>Status</th><th>MAC</th><th>Metric</th><th>Value</th><th>Error</th></tr></thead>
+        <tbody id="events"></tbody>
+      </table>
+    </section>
+  </main>
+
+  <script>
+    const token = document.querySelector('#token');
+    const statusLine = document.querySelector('#status');
+    const chartCanvas = document.querySelector('#sensor-chart');
+    const chartTooltip = document.querySelector('#chart-tooltip');
+    const detailTitle = document.querySelector('#detail-title');
+    const detailStatus = document.querySelector('#detail-status');
+    const metricControls = document.querySelector('#metric-controls');
+    const chartContext = chartCanvas.getContext('2d');
+    const energyChartCanvas = document.querySelector('#energy-chart');
+    const energyChartTooltip = document.querySelector('#energy-chart-tooltip');
+    const energyDetailTitle = document.querySelector('#energy-detail-title');
+    const energyDetailStatus = document.querySelector('#energy-detail-status');
+    const energyChartContext = energyChartCanvas.getContext('2d');
+    let devicesCache = [];
+    let energyCache = [];
+    let selectedDevice = null;
+    let selectedMetric = 'temperature_c';
+    let selectedEnergy = null;
+    let currentChartPoints = [];
+    let currentChartUnit = '';
+    let currentEnergyChartPoints = [];
+    let currentEnergyChartUnit = '';
+    token.value = localStorage.getItem('ble_api_token') || '';
+    token.addEventListener('change', () => localStorage.setItem('ble_api_token', token.value));
+    document.querySelector('#refresh').addEventListener('click', load);
+    document.querySelector('#clear-events').addEventListener('click', async () => {
+      if (!confirm('Delete notification event history?')) return;
+      statusLine.textContent = 'Deleting notification history';
+      statusLine.className = 'muted';
+      try {
+        await deleteAction('/api/notification-events');
+        await load();
+      } catch (err) {
+        statusLine.textContent = err.message;
+        statusLine.className = 'muted error';
+      }
+    });
+
+    const metrics = [
+      { key: 'temperature_c', label: 'Temp', unit: '°C', digits: 1 },
+      { key: 'humidity_percent', label: 'Humidity', unit: '%', digits: 1 },
+      { key: 'battery_percent', label: 'Battery', unit: '%', digits: 0 },
+      { key: 'lux', label: 'Lux', unit: 'lx', digits: 0 },
+      { key: 'co2_ppm', label: 'CO2', unit: 'ppm', digits: 0 },
+      { key: 'pressure_hpa', label: 'Pressure', unit: 'hPa', digits: 1 },
+      { key: 'etvoc', label: 'eTVOC', unit: '', digits: 0 },
+      { key: 'rssi_dbm', label: 'RSSI', unit: 'dBm', digits: 0 },
+    ];
+
+    function headers() {
+      return token.value ? { Authorization: `Bearer ${token.value}` } : {};
+    }
+
+    async function getJSON(path) {
+      const res = await fetch(path, { headers: headers() });
+      if (!res.ok) throw new Error(`${path}: ${res.status}`);
+      return res.json();
+    }
+
+    async function postAction(path) {
+      const res = await fetch(path, { method: 'POST', headers: headers() });
+      if (!res.ok) throw new Error(`${path}: ${res.status}`);
+    }
+
+    async function postJSON(path) {
+      const res = await fetch(path, { method: 'POST', headers: headers() });
+      if (!res.ok) throw new Error(`${path}: ${res.status}`);
+      return res.json();
+    }
+
+    async function deleteAction(path) {
+      const res = await fetch(path, { method: 'DELETE', headers: headers() });
+      if (!res.ok) throw new Error(`${path}: ${res.status}`);
+    }
+
+    function cell(value) {
+      return value === null || value === undefined || value === '' ? '-' : value;
+    }
+
+    function number(value, digits = 1) {
+      return value === null || value === undefined ? '-' : Number(value).toFixed(digits);
+    }
+
+    function escapeHTML(value) {
+      return String(value ?? '').replace(/[&<>"']/g, char => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+      }[char]));
+    }
+
+    function metricInfo(metric) {
+      return metrics.find(item => item.key === metric) || { key: metric, label: metric, unit: '', digits: 1 };
+    }
+
+    function formatMetricValue(value, metric) {
+      if (value === null || value === undefined || Number.isNaN(Number(value))) return '-';
+      const info = metricInfo(metric);
+      const suffix = info.unit ? ` ${info.unit}` : '';
+      return `${Number(value).toFixed(info.digits)}${suffix}`;
+    }
+
+    function energyDigits(unit, metric) {
+      if (unit === '%' || unit === 'W' || unit === 'V') return 0;
+      if (metric.endsWith('_w') || metric.endsWith('_percent')) return 0;
+      return 1;
+    }
+
+    function formatEnergyValue(value, unit, metric) {
+      if (value === null || value === undefined || Number.isNaN(Number(value))) return '-';
+      const suffix = unit ? ` ${unit}` : '';
+      return `${Number(value).toFixed(energyDigits(unit, metric))}${suffix}`;
+    }
+
+    function visibleDevice(item) {
+      return item?.enabled !== false;
+    }
+
+    function shortToken(value) {
+      if (!value) return '-';
+      if (value.length <= 16) return value;
+      return `${value.slice(0, 8)}...${value.slice(-8)}`;
+    }
+
+    function matchesVisibleDevice(item, visibleMACs) {
+      const mac = (item?.mac || '').toLowerCase();
+      return visibleMACs.has(mac);
+    }
+
+    function renderMetricControls() {
+      metricControls.innerHTML = metrics.map(metric => (
+        `<button class="metric-button" data-metric="${metric.key}" aria-pressed="${metric.key === selectedMetric}">${metric.label}</button>`
+      )).join('');
+    }
+
+    metricControls.addEventListener('click', event => {
+      const button = event.target.closest('button[data-metric]');
+      if (!button) return;
+      selectedMetric = button.dataset.metric;
+      renderMetricControls();
+      if (selectedDevice) loadSensorSeries();
+    });
+
+    document.querySelector('#devices').addEventListener('click', event => {
+      const button = event.target.closest('button[data-mac]');
+      if (!button) return;
+      const device = devicesCache.find(item => item.mac === button.dataset.mac);
+      if (device) selectDevice(device);
+    });
+
+    document.querySelector('#energy').addEventListener('click', event => {
+      const button = event.target.closest('button[data-energy-index]');
+      if (!button) return;
+      const reading = energyCache[Number(button.dataset.energyIndex)];
+      if (reading) selectEnergy(reading);
+    });
+
+    document.querySelector('#rules').addEventListener('click', async event => {
+      const button = event.target.closest('button[data-reset-rule-id]');
+      if (!button) return;
+      button.disabled = true;
+      statusLine.textContent = `Resetting cooldown for rule ${button.dataset.resetRuleId}`;
+      statusLine.className = 'muted';
+      try {
+        await postAction(`/api/alert-rules/${button.dataset.resetRuleId}/reset-cooldown`);
+        await load();
+      } catch (err) {
+        statusLine.textContent = err.message;
+        statusLine.className = 'muted error';
+        button.disabled = false;
+      }
+    });
+
+    document.querySelector('#ios-devices').addEventListener('click', async event => {
+      const testButton = event.target.closest('button[data-test-ios-device-id]');
+      if (testButton) {
+        testButton.disabled = true;
+        statusLine.textContent = `Sending test notification to iOS device ${testButton.dataset.testIosDeviceId}`;
+        statusLine.className = 'muted';
+        try {
+          const result = await postJSON(`/api/ios/devices/${testButton.dataset.testIosDeviceId}/test-notification`);
+          statusLine.textContent = `Test notification ${result.status} at ${new Date(result.sent_at).toLocaleString()}`;
+          statusLine.className = 'muted';
+        } catch (err) {
+          statusLine.textContent = err.message;
+          statusLine.className = 'muted error';
+        } finally {
+          testButton.disabled = false;
+        }
+        return;
+      }
+
+      const button = event.target.closest('button[data-delete-ios-device-id]');
+      if (!button) return;
+      if (!confirm(`Delete iOS device ${button.dataset.deleteIosDeviceId}?`)) return;
+      button.disabled = true;
+      statusLine.textContent = `Deleting iOS device ${button.dataset.deleteIosDeviceId}`;
+      statusLine.className = 'muted';
+      try {
+        await deleteAction(`/api/ios/devices/${button.dataset.deleteIosDeviceId}`);
+        await load();
+      } catch (err) {
+        statusLine.textContent = err.message;
+        statusLine.className = 'muted error';
+        button.disabled = false;
+      }
+    });
+
+    async function load() {
+      statusLine.textContent = 'Loading';
+      statusLine.className = 'muted';
+      try {
+        const devices = (await getJSON('/api/devices')).filter(visibleDevice);
+        devicesCache = devices;
+        const visibleMACs = new Set(devices.map(device => device.mac.toLowerCase()));
+        const latest = await Promise.all(devices.map(async d => {
+          try { return { device: d, latest: await getJSON(`/api/devices/${d.mac}/latest`) }; }
+          catch { return { device: d, latest: null }; }
+        }));
+        document.querySelector('#devices').innerHTML = latest.map(({ device, latest }) => {
+          const values = latest?.values || {};
+          return `<tr><td><button class="link-button" data-mac="${escapeHTML(device.mac)}">${escapeHTML(device.mac)}</button></td><td>${escapeHTML(device.label)}</td><td>${escapeHTML(cell(device.sensor_category))}</td><td>${escapeHTML(cell(latest?.ts))}</td><td>${number(values.temperature_c)}</td><td>${number(values.humidity_percent)}</td><td>${number(values.battery_percent, 0)}</td><td>${number(values.lux, 0)}</td><td>${number(values.co2_ppm, 0)}</td></tr>`;
+        }).join('');
+        if (!selectedDevice && latest.length) {
+          await selectDevice(latest[0].device);
+        } else if (selectedDevice) {
+          const refreshed = devices.find(item => item.mac === selectedDevice.mac);
+          if (refreshed) {
+            selectedDevice = refreshed;
+            await loadSensorSeries();
+          }
+        }
+
+        const rules = (await getJSON('/api/alert-rules')).filter(item => matchesVisibleDevice(item, visibleMACs));
+        document.querySelector('#rules').innerHTML = rules.map(r => `<tr><td>${r.id}</td><td>${escapeHTML(r.mac)}</td><td>${escapeHTML(r.metric)}</td><td>${escapeHTML(r.operator)} ${escapeHTML(r.threshold)}</td><td>${Math.round(r.cooldown_seconds / 3600)}h</td><td>${escapeHTML(cell(r.last_notified_at))}</td><td>${r.enabled}</td><td>${cell(r.last_value)}</td><td><button data-reset-rule-id="${r.id}">Reset</button></td></tr>`).join('');
+
+        const iosDevices = await getJSON('/api/ios/devices');
+        document.querySelector('#ios-devices').innerHTML = iosDevices.map(device => `<tr><td>${device.id}</td><td>${escapeHTML(cell(device.device_name))}</td><td>${escapeHTML(device.app_bundle_id)}</td><td>${escapeHTML(device.apns_environment)}</td><td>${device.enabled}</td><td>${escapeHTML(cell(device.last_seen_at))}</td><td>${escapeHTML(cell(device.updated_at))}</td><td title="${escapeHTML(device.apns_device_token)}">${escapeHTML(shortToken(device.apns_device_token))}</td><td><button data-test-ios-device-id="${device.id}" ${device.enabled ? '' : 'disabled'}>Test</button> <button data-delete-ios-device-id="${device.id}">Delete</button></td></tr>`).join('');
+
+        const energy = await getJSON('/api/energy/latest');
+        energyCache = energy;
+        document.querySelector('#energy').innerHTML = energy.map((e, index) => `<tr><td><button class="link-button" data-energy-index="${index}">${escapeHTML(cell(e.label || e.device_key))}</button></td><td>${escapeHTML(e.source)}</td><td><button class="link-button" data-energy-index="${index}">${escapeHTML(e.metric)}</button></td><td>${number(e.value, 0)}</td><td>${escapeHTML(cell(e.unit))}</td><td>${escapeHTML(cell(e.ts))}</td></tr>`).join('');
+        if (!selectedEnergy && energy.length) {
+          await selectEnergy(energy[0]);
+        } else if (selectedEnergy) {
+          const refreshedEnergy = energy.find(item => (
+            item.source === selectedEnergy.source &&
+            item.device_key === selectedEnergy.device_key &&
+            item.metric === selectedEnergy.metric
+          ));
+          if (refreshedEnergy) {
+            selectedEnergy = refreshedEnergy;
+            await loadEnergySeries();
+          }
+        }
+
+        const events = (await getJSON('/api/notification-events?limit=20')).filter(item => matchesVisibleDevice(item, visibleMACs));
+        document.querySelector('#events').innerHTML = events.map(e => `<tr><td>${escapeHTML(e.created_at)}</td><td>${escapeHTML(e.status)}</td><td>${escapeHTML(e.mac)}</td><td>${escapeHTML(e.metric)}</td><td>${cell(e.value)}</td><td>${escapeHTML(cell(e.error_message))}</td></tr>`).join('');
+        statusLine.textContent = `Updated ${new Date().toLocaleString()}`;
+      } catch (err) {
+        statusLine.textContent = err.message;
+        statusLine.className = 'muted error';
+      }
+    }
+
+    async function selectDevice(device) {
+      selectedDevice = device;
+      await loadSensorSeries();
+    }
+
+    async function loadSensorSeries() {
+      if (!selectedDevice) return;
+      const info = metricInfo(selectedMetric);
+      detailTitle.textContent = `${selectedDevice.label || selectedDevice.mac} / ${info.label}`;
+      detailStatus.textContent = 'Loading 1d graph';
+      detailStatus.className = 'muted';
+      try {
+        const data = await getJSON(`/api/devices/${encodeURIComponent(selectedDevice.mac)}/series?metric=${encodeURIComponent(selectedMetric)}&range=1d`);
+        currentChartPoints = (data.points || []).filter(point => point.value !== null && point.value !== undefined);
+        currentChartUnit = info.unit;
+        detailStatus.textContent = `${selectedDevice.mac} · ${currentChartPoints.length} points · 1d`;
+        drawChart();
+      } catch (err) {
+        currentChartPoints = [];
+        detailStatus.textContent = err.message;
+        detailStatus.className = 'muted error';
+        drawChart();
+      }
+    }
+
+    async function selectEnergy(reading) {
+      selectedEnergy = reading;
+      await loadEnergySeries();
+    }
+
+    async function loadEnergySeries() {
+      if (!selectedEnergy) return;
+      energyDetailTitle.textContent = `${selectedEnergy.label || selectedEnergy.device_key} / ${selectedEnergy.metric}`;
+      energyDetailStatus.textContent = 'Loading 1d graph';
+      energyDetailStatus.className = 'muted';
+      try {
+        const params = new URLSearchParams({
+          source: selectedEnergy.source,
+          device_key: selectedEnergy.device_key,
+          metric: selectedEnergy.metric,
+          range: '1d',
+        });
+        const data = await getJSON(`/api/energy/series?${params.toString()}`);
+        currentEnergyChartPoints = (data.points || []).filter(point => point.value !== null && point.value !== undefined);
+        currentEnergyChartUnit = data.unit || selectedEnergy.unit || '';
+        energyDetailStatus.textContent = `${selectedEnergy.source} · ${selectedEnergy.device_key} · ${currentEnergyChartPoints.length} points · 1d`;
+        drawEnergyChart();
+      } catch (err) {
+        currentEnergyChartPoints = [];
+        energyDetailStatus.textContent = err.message;
+        energyDetailStatus.className = 'muted error';
+        drawEnergyChart();
+      }
+    }
+
+    function chartColors() {
+      const dark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+      return {
+        axis: dark ? '#53606c' : '#cbd3dc',
+        text: dark ? '#a8b0b8' : '#5f6b76',
+        line: dark ? '#8ab4f8' : '#0b57d0',
+        fill: dark ? 'rgba(138, 180, 248, 0.14)' : 'rgba(11, 87, 208, 0.12)',
+        point: dark ? '#dbeafe' : '#0f3f89',
+      };
+    }
+
+    function drawLineChart(canvas, context, rawPoints, options = {}) {
+      const rect = canvas.getBoundingClientRect();
+      const dpr = window.devicePixelRatio || 1;
+      canvas.width = Math.max(1, Math.floor(rect.width * dpr));
+      canvas.height = Math.max(1, Math.floor(rect.height * dpr));
+      context.setTransform(dpr, 0, 0, dpr, 0, 0);
+      context.clearRect(0, 0, rect.width, rect.height);
+
+      const colors = chartColors();
+      const padding = { top: 22, right: 20, bottom: 34, left: 52 };
+      const width = rect.width - padding.left - padding.right;
+      const height = rect.height - padding.top - padding.bottom;
+      const digits = options.digits ?? 1;
+
+      context.strokeStyle = colors.axis;
+      context.lineWidth = 1;
+      context.beginPath();
+      context.moveTo(padding.left, padding.top);
+      context.lineTo(padding.left, padding.top + height);
+      context.lineTo(padding.left + width, padding.top + height);
+      context.stroke();
+
+      if (!rawPoints.length) {
+        context.fillStyle = colors.text;
+        context.font = '13px system-ui, sans-serif';
+        context.fillText('No data', padding.left + 10, padding.top + 24);
+        return;
+      }
+
+      const points = rawPoints.map(point => ({ ts: new Date(point.ts).getTime(), value: Number(point.value) }))
+        .filter(point => Number.isFinite(point.ts) && Number.isFinite(point.value));
+      if (!points.length) return;
+
+      const minX = Math.min(...points.map(point => point.ts));
+      const maxX = Math.max(...points.map(point => point.ts));
+      let minY = Math.min(...points.map(point => point.value));
+      let maxY = Math.max(...points.map(point => point.value));
+      if (minY === maxY) {
+        minY -= 1;
+        maxY += 1;
+      } else {
+        const pad = (maxY - minY) * 0.08;
+        minY -= pad;
+        maxY += pad;
+      }
+
+      const xFor = ts => padding.left + ((ts - minX) / Math.max(1, maxX - minX)) * width;
+      const yFor = value => padding.top + height - ((value - minY) / (maxY - minY)) * height;
+
+      context.fillStyle = colors.text;
+      context.font = '12px system-ui, sans-serif';
+      context.textAlign = 'right';
+      context.textBaseline = 'middle';
+      for (let i = 0; i <= 4; i++) {
+        const value = minY + (maxY - minY) * (i / 4);
+        const y = yFor(value);
+        context.strokeStyle = colors.axis;
+        context.beginPath();
+        context.moveTo(padding.left, y);
+        context.lineTo(padding.left + width, y);
+        context.stroke();
+        context.fillText(value.toFixed(digits), padding.left - 8, y);
+      }
+
+      context.textAlign = 'center';
+      context.textBaseline = 'top';
+      const startLabel = new Date(minX).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      const endLabel = new Date(maxX).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      context.fillText(startLabel, padding.left, padding.top + height + 10);
+      context.fillText(endLabel, padding.left + width, padding.top + height + 10);
+
+      context.beginPath();
+      points.forEach((point, index) => {
+        const x = xFor(point.ts);
+        const y = yFor(point.value);
+        if (index === 0) context.moveTo(x, y);
+        else context.lineTo(x, y);
+      });
+      context.strokeStyle = colors.line;
+      context.lineWidth = 2;
+      context.stroke();
+
+      context.lineTo(xFor(points[points.length - 1].ts), padding.top + height);
+      context.lineTo(xFor(points[0].ts), padding.top + height);
+      context.closePath();
+      context.fillStyle = colors.fill;
+      context.fill();
+    }
+
+    function drawChart() {
+      drawLineChart(chartCanvas, chartContext, currentChartPoints, {
+        digits: metricInfo(selectedMetric).digits,
+      });
+    }
+
+    function drawEnergyChart() {
+      drawLineChart(energyChartCanvas, energyChartContext, currentEnergyChartPoints, {
+        digits: selectedEnergy ? energyDigits(currentEnergyChartUnit, selectedEnergy.metric) : 1,
+      });
+    }
+
+    function nearestPointForEvent(canvas, rawPoints, event) {
+      if (!rawPoints.length) return null;
+      const rect = canvas.getBoundingClientRect();
+      const x = event.clientX - rect.left;
+      const padding = { left: 52, right: 20 };
+      const width = rect.width - padding.left - padding.right;
+      const points = rawPoints.map(point => ({ ts: new Date(point.ts).getTime(), raw: point }))
+        .filter(point => Number.isFinite(point.ts));
+      if (!points.length) return null;
+      const minX = Math.min(...points.map(point => point.ts));
+      const maxX = Math.max(...points.map(point => point.ts));
+      const targetTS = minX + ((x - padding.left) / Math.max(1, width)) * (maxX - minX);
+      const nearest = points.reduce((best, point) => (
+        Math.abs(point.ts - targetTS) < Math.abs(best.ts - targetTS) ? point : best
+      ), points[0]);
+      return { nearest, rect, x };
+    }
+
+    function showChartTooltip(tooltip, hit, html, event) {
+      tooltip.style.display = 'block';
+      tooltip.style.left = `${Math.min(hit.rect.width - 170, Math.max(8, hit.x + 12))}px`;
+      tooltip.style.top = `${Math.max(8, event.clientY - hit.rect.top - 44)}px`;
+      tooltip.innerHTML = html;
+    }
+
+    chartCanvas.addEventListener('mousemove', event => {
+      const hit = nearestPointForEvent(chartCanvas, currentChartPoints, event);
+      if (!hit) return;
+      showChartTooltip(
+        chartTooltip,
+        hit,
+        `${escapeHTML(new Date(hit.nearest.raw.ts).toLocaleString())}<br>${escapeHTML(formatMetricValue(hit.nearest.raw.value, selectedMetric))}`,
+        event
+      );
+    });
+
+    chartCanvas.addEventListener('mouseleave', () => {
+      chartTooltip.style.display = 'none';
+    });
+
+    energyChartCanvas.addEventListener('mousemove', event => {
+      if (!selectedEnergy) return;
+      const hit = nearestPointForEvent(energyChartCanvas, currentEnergyChartPoints, event);
+      if (!hit) return;
+      showChartTooltip(
+        energyChartTooltip,
+        hit,
+        `${escapeHTML(new Date(hit.nearest.raw.ts).toLocaleString())}<br>${escapeHTML(formatEnergyValue(hit.nearest.raw.value, currentEnergyChartUnit, selectedEnergy.metric))}`,
+        event
+      );
+    });
+
+    energyChartCanvas.addEventListener('mouseleave', () => {
+      energyChartTooltip.style.display = 'none';
+    });
+
+    new ResizeObserver(drawChart).observe(chartCanvas);
+    new ResizeObserver(drawEnergyChart).observe(energyChartCanvas);
+    renderMetricControls();
+    load();
+  </script>
+</body>
+</html>

@@ -1,0 +1,19 @@
+[Unit]
+Description=Nature Remo E power collector
+After=postgresql.service network-online.target
+Wants=postgresql.service network-online.target
+
+[Service]
+Type=simple
+User=home_metrics
+Group=home_metrics
+WorkingDirectory=/var/lib/home-metrics
+Environment=NATURE_REMO_INTERVAL=60s
+Environment=NATURE_REMO_DEVICE_KEY=remo-e
+EnvironmentFile=-/etc/home-metrics/home-metrics.env
+ExecStart=/usr/local/bin/hm-nature-remo-collector
+Restart=always
+RestartSec=10s
+
+[Install]
+WantedBy=multi-user.target
