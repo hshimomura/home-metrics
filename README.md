@@ -133,11 +133,13 @@ docker compose up -d --build hm-api-server hm-alert-worker hm-db-maint
 DB は `timescale/timescaledb:latest-pg17` を使い、初回起動時に `db/schema.sql` と
 `db/energy_optimization.sql` を読み込みます。永続データは `pgdata` volume に保存します。
 
-BLE と ECHONET Lite はホストの BlueZ D-Bus や UDP multicast / port 3610 を使うため、
-Compose では host network の profile service として分けています。Cisco Spaces Firehose はネットワーク接続だけで動くため、通常の Compose network 上で動作します。
+DB は Compose network 内だけで公開し、collector は `db:5432` へ接続します。
+Cisco Spaces Firehose、Nature Remo、apcupsd、ECHONET Lite は通常の Compose
+network 上で動作します。BLE collector だけはホストの BlueZ D-Bus を使うため、
+`ble` profile の例外として host network を使います。
 
 ```bash
-docker compose --profile ble --profile echonet up -d --build
+docker compose --profile cisco-spaces --profile echonet up -d --build
 ```
 
 Cisco Spaces Firehose を使う場合は `.env` に `CISCO_SPACES_API_KEY` を設定し、BLE ではなく `cisco-spaces` profile を有効にします。
@@ -149,10 +151,8 @@ docker compose --profile cisco-spaces up -d --build hm-cisco-spaces-collector
 BLE collector は `/var/run/dbus` を mount し、`BLE_SENSORS_FILE` として
 `SENSORS_FILE` の JSON を `/etc/home-metrics/sensors.json` に mount します。
 ECHONET Lite は `ECHONET_TARGET_IP` を設定すると multicast discovery を使わず直接対象へ送信します。
-
-host network の collector は Compose の `db` DNS 名を使えないため、DB はホスト側
-`127.0.0.1:${POSTGRES_PORT:-5432}` に publish し、collector 側の `BLE_DB_DSN` は
-`127.0.0.1` 経由にしています。
+DB をホストに publish しない構成では、BLE profile を使う場合だけ別途
+`BLE_DB_DSN` で到達可能なDB接続先を指定してください。
 
 ## BLE Collector
 

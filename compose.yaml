@@ -6,10 +6,6 @@ x-app-env: &app_env
   BLE_DB_DSN: postgres://${POSTGRES_USER:-home_metrics}:${POSTGRES_PASSWORD:-home_metrics}@db:5432/${POSTGRES_DB:-ble_sensors}?sslmode=disable
   TZ: ${TZ:-Asia/Tokyo}
 
-x-host-app-env: &host_app_env
-  BLE_DB_DSN: postgres://${POSTGRES_USER:-home_metrics}:${POSTGRES_PASSWORD:-home_metrics}@127.0.0.1:5432/${POSTGRES_DB:-ble_sensors}?sslmode=disable
-  TZ: ${TZ:-Asia/Tokyo}
-
 services:
   db:
     image: timescale/timescaledb:latest-pg17
@@ -19,8 +15,6 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-home_metrics}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-home_metrics}
       TZ: ${TZ:-Asia/Tokyo}
-    ports:
-      - "${POSTGRES_BIND_ADDR:-127.0.0.1}:${POSTGRES_PORT:-5432}:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
       - ./db/schema.sql:/docker-entrypoint-initdb.d/10-schema.sql:ro
@@ -143,12 +137,11 @@ services:
     image: *app_image
     restart: unless-stopped
     profiles: ["echonet"]
-    network_mode: host
     depends_on:
       db:
         condition: service_healthy
     environment:
-      <<: *host_app_env
+      <<: *app_env
       ECHONET_TARGET_IP: ${ECHONET_TARGET_IP:-}
       ECHONET_DEVICE_KEY: ${ECHONET_DEVICE_KEY:-echonet-device}
       ECHONET_LABEL: ${ECHONET_LABEL:-ECHONET Lite device}
@@ -169,7 +162,8 @@ services:
       db:
         condition: service_healthy
     environment:
-      <<: *host_app_env
+      BLE_DB_DSN: ${BLE_DB_DSN:-postgres://${POSTGRES_USER:-home_metrics}:${POSTGRES_PASSWORD:-home_metrics}@127.0.0.1:5432/${POSTGRES_DB:-ble_sensors}?sslmode=disable}
+      TZ: ${TZ:-Asia/Tokyo}
       BLE_ADAPTER: ${BLE_ADAPTER:-/org/bluez/hci0}
       BLE_POLL_INTERVAL: ${BLE_POLL_INTERVAL:-2s}
       BLE_SENSORS_FILE: /etc/home-metrics/sensors.json
