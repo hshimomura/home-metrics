@@ -134,9 +134,9 @@ DB は `timescale/timescaledb:latest-pg17` を使い、初回起動時に `db/sc
 `db/energy_optimization.sql` を読み込みます。永続データは `pgdata` volume に保存します。
 
 DB は Compose network 内だけで公開し、collector は `db:5432` へ接続します。
-Cisco Spaces Firehose、Nature Remo、apcupsd、ECHONET Lite は通常の Compose
-network 上で動作します。BLE collector だけはホストの BlueZ D-Bus を使うため、
-`ble` profile の例外として host network を使います。
+Cisco Spaces Firehose、Nature Remo、apcupsd、ECHONET Lite、BLE collector は
+通常の Compose network 上で動作します。BLE collector は network ではなく
+ホストの BlueZ D-Bus へアクセスするため、`/var/run/dbus` を mount します。
 
 ```bash
 docker compose --profile cisco-spaces --profile echonet up -d --build
@@ -151,8 +151,6 @@ docker compose --profile cisco-spaces up -d --build hm-cisco-spaces-collector
 BLE collector は `/var/run/dbus` を mount し、`BLE_SENSORS_FILE` として
 `SENSORS_FILE` の JSON を `/etc/home-metrics/sensors.json` に mount します。
 ECHONET Lite は `ECHONET_TARGET_IP` を設定すると multicast discovery を使わず直接対象へ送信します。
-DB をホストに publish しない構成では、BLE profile を使う場合だけ別途
-`BLE_DB_DSN` で到達可能なDB接続先を指定してください。
 
 ## BLE Collector
 

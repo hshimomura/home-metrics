@@ -156,14 +156,12 @@ services:
     image: *app_image
     restart: unless-stopped
     profiles: ["ble"]
-    network_mode: host
     user: root
     depends_on:
       db:
         condition: service_healthy
     environment:
-      BLE_DB_DSN: ${BLE_DB_DSN:-postgres://${POSTGRES_USER:-home_metrics}:${POSTGRES_PASSWORD:-home_metrics}@127.0.0.1:5432/${POSTGRES_DB:-ble_sensors}?sslmode=disable}
-      TZ: ${TZ:-Asia/Tokyo}
+      <<: *app_env
       BLE_ADAPTER: ${BLE_ADAPTER:-/org/bluez/hci0}
       BLE_POLL_INTERVAL: ${BLE_POLL_INTERVAL:-2s}
       BLE_SENSORS_FILE: /etc/home-metrics/sensors.json
