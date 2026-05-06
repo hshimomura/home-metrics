@@ -1,12 +1,13 @@
 # Home Metrics
 
-Home Metrics は、家庭や小規模ラボ向けのセンサー・電力・UPS メトリクスを PostgreSQL / TimescaleDB に保存し、API/Web UI/通知基盤から参照するためのツール群です。BLE collector、ECHONET Lite、Nature Remo、apcupsd collector を含みます。
+Home Metrics は、家庭や小規模ラボ向けのセンサー・電力・UPS メトリクスを PostgreSQL / TimescaleDB に保存し、API/Web UI/通知基盤から参照するためのツール群です。BLE collector、Cisco Spaces Indoor IoT Firehose collector、ECHONET Lite、Nature Remo、apcupsd collector を含みます。
 
 
 ## Directory Layout
 
 ```text
 cmd/hm-ble-collector/   BlueZ D-Bus で BLE を読み、DB に 1 分値を書き込む Go daemon
+cmd/hm-cisco-spaces-collector/ Cisco Spaces Firehose で Indoor IoT telemetry を読み、DB に 1 分値を書き込む Go daemon
 cmd/hm-alert-worker/    alert_rules を評価し、通知イベントを記録する Go worker
 cmd/hm-api-server/      iOS app / external app 向け REST API
 cmd/hm-db-maint/        rollup 更新と retention を行う DB maintenance CLI
@@ -28,6 +29,7 @@ hm-db-check
 hm-alert-worker
 hm-api-server
 hm-db-maint
+hm-cisco-spaces-collector
 hm-nature-remo-collector
 hm-echonet-collector
 bin/
@@ -115,7 +117,7 @@ sudo install -m 0600 examples/home-metrics.env.example /etc/home-metrics/home-me
 sudo install -m 0644 examples/sensors.json.example /etc/home-metrics/sensors.json
 ```
 
-Edit `/etc/home-metrics/home-metrics.env` for host-specific settings such as `BLE_DB_DSN`, API token, APC UPS address, ECHONET target, Nature Remo token, APNs settings, intervals, and retention windows.
+Edit `/etc/home-metrics/home-metrics.env` for host-specific settings such as `BLE_DB_DSN`, API token, sensor ingest source, Cisco Spaces API key, APC UPS address, ECHONET target, Nature Remo token, APNs settings, intervals, and retention windows.
 
 Edit `/etc/home-metrics/sensors.json` for BLE sensor MAC addresses, labels, device type, location, and enabled/disabled state. `db/schema.sql` intentionally does not seed personal sensor or energy device rows; use `examples/seed.example.sql` as a starting point for local metadata.
 
@@ -132,10 +134,16 @@ DB は `timescale/timescaledb:latest-pg17` を使い、初回起動時に `db/sc
 `db/energy_optimization.sql` を読み込みます。永続データは `pgdata` volume に保存します。
 
 BLE と ECHONET Lite はホストの BlueZ D-Bus や UDP multicast / port 3610 を使うため、
-Compose では host network の profile service として分けています。
+Compose では host network の profile service として分けています。Cisco Spaces Firehose はネットワーク接続だけで動くため、通常の Compose network 上で動作します。
 
 ```bash
 docker compose --profile ble --profile echonet up -d --build
+```
+
+Cisco Spaces Firehose を使う場合は `.env` に `CISCO_SPACES_API_KEY` を設定し、BLE ではなく `cisco-spaces` profile を有効にします。
+
+```bash
+docker compose --profile cisco-spaces up -d --build hm-cisco-spaces-collector
 ```
 
 BLE collector は `/var/run/dbus` を mount し、`BLE_SENSORS_FILE` として
@@ -182,6 +190,35 @@ co2_ppm
 lux
 etvoc
 ```
+
+## Cisco Spaces Firehose Collector
+
+Cisco Spaces Indoor IoT Firehose から `IOT_TELEMETRY` event を読み、既存の
+`devices` と `sensor_minute` に 1 分値を書き込みます。BLE adapter がない VM や
+container 環境では、BLE scan の代わりにこの collector を使えます。
+
+```bash
+BLE_DB_DSN='dbname=ble_sensors host=/var/run/postgresql' \
+SENSOR_INGEST_SOURCE=cisco_spaces \
+CISCO_SPACES_API_KEY='...' \
+hm-cisco-spaces-collector
+```
+
+主な設定:
+
+```text
+CISCO_SPACES_FIREHOSE_URL
+CISCO_SPACES_SAMPLE_WINDOW
+CISCO_SPACES_FIELD_FRESHNESS
+CISCO_SPACES_UPLOAD_INTERVAL
+CISCO_SPACES_BATTERY_MODE
+CISCO_SPACES_BATTERY_ALLOWLIST
+CISCO_SPACES_DRY_RUN
+```
+
+collector は `X-API-Key` header で Firehose に接続し、stream が切れた場合は
+exponential backoff で再接続します。温度、湿度、気圧、CO2、照度、battery、TVOC
+は 5 sample median を使い、既知の sentinel 値は保存しません。
 
 ## DB Check
 
@@ -398,6 +435,7 @@ battery_voltage_v
 ```bash
 sudo make install
 sudo cp deploy/hm-ble-collector.service /etc/systemd/system/
+sudo cp deploy/hm-cisco-spaces-collector.service /etc/systemd/system/
 sudo cp deploy/hm-api-server.service /etc/systemd/system/
 sudo cp deploy/hm-alert-worker.service /etc/systemd/system/
 sudo cp deploy/hm-db-maint.service /etc/systemd/system/
@@ -407,6 +445,8 @@ sudo cp deploy/hm-echonet-collector.service /etc/systemd/system/
 sudo cp deploy/hm-apcupsd-collector.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now hm-ble-collector.service
+# Use Cisco Spaces instead of local BLE scanning when the host has no BLE adapter.
+# sudo systemctl enable --now hm-cisco-spaces-collector.service
 sudo systemctl enable --now hm-api-server.service
 sudo systemctl enable --now hm-alert-worker.service
 sudo systemctl enable --now hm-db-maint.timer
