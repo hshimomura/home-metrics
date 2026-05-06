@@ -110,3 +110,23 @@ func TestAPNSHost(t *testing.T) {
 		t.Fatalf("empty environment host = %q, want %q", got, apnsSandboxHost)
 	}
 }
+
+func TestAlertContentUsesShortMetricNames(t *testing.T) {
+	value := 20.9
+	title, body := alertContent("Env", "temperature_c", &value)
+	if title != "Env Temp alert" {
+		t.Fatalf("title = %q, want Env Temp alert", title)
+	}
+	if body != "Current Temp is 20.9 °C." {
+		t.Fatalf("body = %q, want short temperature body", body)
+	}
+
+	value = 55
+	title, body = alertContent("Desk", "humidity_percent", &value)
+	if title != "Desk Hum alert" {
+		t.Fatalf("title = %q, want Desk Hum alert", title)
+	}
+	if body != "Current Hum is 55 %." {
+		t.Fatalf("body = %q, want short humidity body", body)
+	}
+}
