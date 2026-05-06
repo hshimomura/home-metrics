@@ -1,0 +1,158 @@
+name: home-metrics
+
+x-app-image: &app_image home-metrics:local
+
+x-app-env: &app_env
+  BLE_DB_DSN: postgres://${POSTGRES_USER:-home_metrics}:${POSTGRES_PASSWORD:-home_metrics}@db:5432/${POSTGRES_DB:-ble_sensors}?sslmode=disable
+  TZ: ${TZ:-Asia/Tokyo}
+
+x-host-app-env: &host_app_env
+  BLE_DB_DSN: postgres://${POSTGRES_USER:-home_metrics}:${POSTGRES_PASSWORD:-home_metrics}@127.0.0.1:5432/${POSTGRES_DB:-ble_sensors}?sslmode=disable
+  TZ: ${TZ:-Asia/Tokyo}
+
+services:
+  db:
+    image: timescale/timescaledb:latest-pg17
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-ble_sensors}
+      POSTGRES_USER: ${POSTGRES_USER:-home_metrics}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-home_metrics}
+      TZ: ${TZ:-Asia/Tokyo}
+    ports:
+      - "${POSTGRES_BIND_ADDR:-127.0.0.1}:${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./db/schema.sql:/docker-entrypoint-initdb.d/10-schema.sql:ro
+      - ./db/energy_optimization.sql:/docker-entrypoint-initdb.d/20-energy-optimization.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-home_metrics} -d ${POSTGRES_DB:-ble_sensors}"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  hm-api-server:
+    image: *app_image
+    build:
+      context: .
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      <<: *app_env
+      API_ADDR: :8080
+      API_TOKEN: ${API_TOKEN:-change-me}
+      API_ALLOWED_ORIGINS: ${API_ALLOWED_ORIGINS:-http://localhost:8080}
+    ports:
+      - "${API_BIND_ADDR:-0.0.0.0}:${API_PORT:-8080}:8080"
+    command: ["hm-api-server"]
+
+  hm-alert-worker:
+    image: *app_image
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      <<: *app_env
+      ALERT_WORKER_INTERVAL: ${ALERT_WORKER_INTERVAL:-1m}
+      ALERT_WORKER_DRY_RUN: ${ALERT_WORKER_DRY_RUN:-true}
+      APNS_KEY_FILE: ${APNS_KEY_FILE:-}
+      APNS_KEY_ID: ${APNS_KEY_ID:-}
+      APNS_TEAM_ID: ${APNS_TEAM_ID:-}
+      APNS_BUNDLE_ID: ${APNS_BUNDLE_ID:-}
+    command: ["hm-alert-worker"]
+
+  hm-db-maint:
+    image: *app_image
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      <<: *app_env
+      DB_MAINT_REFRESH_LOOKBACK: ${DB_MAINT_REFRESH_LOOKBACK:-336h}
+      DB_MAINT_RETAIN_MINUTE: ${DB_MAINT_RETAIN_MINUTE:-336h}
+      DB_MAINT_INTERVAL: ${DB_MAINT_INTERVAL:-1h}
+    entrypoint: ["/bin/sh", "/usr/local/bin/run-db-maint-loop"]
+
+  hm-nature-remo-collector:
+    image: *app_image
+    restart: unless-stopped
+    profiles: ["nature-remo"]
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      <<: *app_env
+      NATURE_REMO_TOKEN: ${NATURE_REMO_TOKEN:-}
+      NATURE_REMO_INTERVAL: ${NATURE_REMO_INTERVAL:-60s}
+      NATURE_REMO_DEVICE_KEY: ${NATURE_REMO_DEVICE_KEY:-remo-e}
+      NATURE_REMO_LABEL: ${NATURE_REMO_LABEL:-Nature Remo E}
+      NATURE_REMO_LOCATION: ${NATURE_REMO_LOCATION:-}
+    command: ["hm-nature-remo-collector"]
+
+  hm-apcupsd-collector:
+    image: *app_image
+    restart: unless-stopped
+    profiles: ["apcupsd"]
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      <<: *app_env
+      APCUPSD_SERVER: ${APCUPSD_SERVER:-tcp://host.docker.internal:3551}
+      APCUPSD_INTERVAL: ${APCUPSD_INTERVAL:-60s}
+      APCUPSD_TIMEOUT: ${APCUPSD_TIMEOUT:-5s}
+      APCUPSD_DEVICE_KEY: ${APCUPSD_DEVICE_KEY:-ups}
+      APCUPSD_LABEL: ${APCUPSD_LABEL:-APC UPS}
+      APCUPSD_LOCATION: ${APCUPSD_LOCATION:-}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    command: ["hm-apcupsd-collector"]
+
+  hm-echonet-collector:
+    image: *app_image
+    restart: unless-stopped
+    profiles: ["echonet"]
+    network_mode: host
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      <<: *host_app_env
+      ECHONET_TARGET_IP: ${ECHONET_TARGET_IP:-}
+      ECHONET_DEVICE_KEY: ${ECHONET_DEVICE_KEY:-echonet-device}
+      ECHONET_LABEL: ${ECHONET_LABEL:-ECHONET Lite device}
+      ECHONET_LOCATION: ${ECHONET_LOCATION:-}
+      ECHONET_LOCAL_ADDR: ${ECHONET_LOCAL_ADDR:-:3610}
+      ECHONET_MULTICAST_ADDR: ${ECHONET_MULTICAST_ADDR:-224.0.23.0:3610}
+      ECHONET_POLL_INTERVAL: ${ECHONET_POLL_INTERVAL:-60s}
+      ECHONET_REQUEST_TIMEOUT: ${ECHONET_REQUEST_TIMEOUT:-3s}
+    command: ["hm-echonet-collector"]
+
+  hm-ble-collector:
+    image: *app_image
+    restart: unless-stopped
+    profiles: ["ble"]
+    network_mode: host
+    user: root
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      <<: *host_app_env
+      BLE_ADAPTER: ${BLE_ADAPTER:-/org/bluez/hci0}
+      BLE_POLL_INTERVAL: ${BLE_POLL_INTERVAL:-2s}
+      BLE_SENSORS_FILE: /etc/home-metrics/sensors.json
+    volumes:
+      - /var/run/dbus:/var/run/dbus
+      - ${SENSORS_FILE:-./examples/sensors.json.example}:/etc/home-metrics/sensors.json:ro
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    command: ["hm-ble-collector"]
+
+volumes:
+  pgdata:
