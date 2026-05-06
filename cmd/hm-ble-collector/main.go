@@ -30,6 +30,23 @@ const (
 	defaultSensorsFile     = "/etc/home-metrics/sensors.json"
 )
 
+type outlierConfig struct {
+	Enabled       bool
+	HistorySize   int
+	ConfirmWindow time.Duration
+	Thresholds    map[string]float64
+}
+
+type metricHistory struct {
+	Accepted []float64
+	Pending  *pendingOutlier
+}
+
+type pendingOutlier struct {
+	Value float64
+	TS    time.Time
+}
+
 type targetDevice struct {
 	MAC        string `json:"mac"`
 	Label      string `json:"label"`
@@ -70,8 +87,10 @@ type aggregate struct {
 }
 
 type collector struct {
-	db      *pgx.Conn
-	windows map[string]*aggregate
+	db            *pgx.Conn
+	windows       map[string]*aggregate
+	outliers      outlierConfig
+	metricHistory map[string]map[string]*metricHistory
 }
 
 func main() {
@@ -85,6 +104,7 @@ func main() {
 
 	dsn := envString("BLE_DB_DSN", defaultDBDSN)
 	pollInterval := envDuration("BLE_POLL_INTERVAL", 2*time.Second)
+	outliers := loadOutlierConfig()
 	adapterPath := defaultAdapterPath
 	if value := os.Getenv("BLE_ADAPTER"); value != "" {
 		adapterPath = dbus.ObjectPath(value)
@@ -123,14 +143,16 @@ func main() {
 	}()
 
 	c := &collector{
-		db:      db,
-		windows: make(map[string]*aggregate),
+		db:            db,
+		windows:       make(map[string]*aggregate),
+		outliers:      outliers,
+		metricHistory: make(map[string]map[string]*metricHistory),
 	}
 
 	ticker := time.NewTicker(pollInterval)
 	defer ticker.Stop()
 
-	log.Printf("BLE collector started adapter=%s poll=%s db=%s", adapterPath, pollInterval, dsn)
+	log.Printf("BLE collector started adapter=%s poll=%s db=%s outlier_filter=%t", adapterPath, pollInterval, dsn, outliers.Enabled)
 	for {
 		select {
 		case <-ctx.Done():
@@ -174,6 +196,65 @@ func envString(name string, fallback string) string {
 		return fallback
 	}
 	return value
+}
+
+func envInt(name string, fallback int) int {
+	value := strings.TrimSpace(os.Getenv(name))
+	if value == "" {
+		return fallback
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil {
+		log.Printf("invalid %s=%q, using %d", name, value, fallback)
+		return fallback
+	}
+	return parsed
+}
+
+func envFloat(name string, fallback float64) float64 {
+	value := strings.TrimSpace(os.Getenv(name))
+	if value == "" {
+		return fallback
+	}
+	parsed, err := strconv.ParseFloat(value, 64)
+	if err != nil {
+		log.Printf("invalid %s=%q, using %.3f", name, value, fallback)
+		return fallback
+	}
+	return parsed
+}
+
+func envBool(name string, fallback bool) bool {
+	value := strings.ToLower(strings.TrimSpace(os.Getenv(name)))
+	if value == "" {
+		return fallback
+	}
+	switch value {
+	case "1", "true", "yes", "on":
+		return true
+	case "0", "false", "no", "off":
+		return false
+	default:
+		log.Printf("invalid %s=%q, using %t", name, value, fallback)
+		return fallback
+	}
+}
+
+func loadOutlierConfig() outlierConfig {
+	return outlierConfig{
+		Enabled:       envBool("BLE_OUTLIER_FILTER", true),
+		HistorySize:   envInt("BLE_OUTLIER_HISTORY_SIZE", 5),
+		ConfirmWindow: envDuration("BLE_OUTLIER_CONFIRM_WINDOW", 10*time.Minute),
+		Thresholds: map[string]float64{
+			"temperature_c":    envFloat("BLE_OUTLIER_TEMP_DELTA", 3),
+			"humidity_percent": envFloat("BLE_OUTLIER_HUMIDITY_DELTA", 20),
+			"battery_percent":  envFloat("BLE_OUTLIER_BATTERY_DELTA", 50),
+			"pressure_hpa":     envFloat("BLE_OUTLIER_PRESSURE_DELTA", 10),
+			"co2_ppm":          envFloat("BLE_OUTLIER_CO2_DELTA", 500),
+			"etvoc":            envFloat("BLE_OUTLIER_ETVOC_DELTA", 500),
+			"rssi_dbm":         envFloat("BLE_OUTLIER_RSSI_DELTA", 40),
+		},
+	}
 }
 
 func loadTargets(path string) (map[string]targetDevice, error) {
@@ -397,6 +478,25 @@ func decodeServiceData(payloadHex string) reading {
 	return r
 }
 
+func sanitizeReading(r reading) reading {
+	r.TemperatureC = sanitizeRange(r.TemperatureC, -40, 85)
+	r.HumidityPercent = sanitizeRange(r.HumidityPercent, 0, 100)
+	r.BatteryPercent = sanitizeRange(r.BatteryPercent, 0, 100)
+	r.RSSI = sanitizeRange(r.RSSI, -127, 20)
+	r.PressureHPa = sanitizeRange(r.PressureHPa, 300, 1100)
+	r.CO2PPM = sanitizeRange(r.CO2PPM, 0, 10000)
+	r.Lux = sanitizeRange(r.Lux, 0, 65534)
+	r.ETVOC = sanitizeRange(r.ETVOC, 0, 60000)
+	return r
+}
+
+func sanitizeRange(value *float64, minValue float64, maxValue float64) *float64 {
+	if value == nil || !isFinite(*value) || *value < minValue || *value > maxValue {
+		return nil
+	}
+	return value
+}
+
 func indexMarker(data []byte, marker []byte) int {
 	for i := 0; i+len(marker) <= len(data); i++ {
 		match := true
@@ -414,6 +514,7 @@ func indexMarker(data []byte, marker []byte) int {
 }
 
 func (c *collector) add(r reading) {
+	r = sanitizeReading(r)
 	window := r.TS.Truncate(time.Minute)
 	key := r.SensorMAC + "|" + window.Format(time.RFC3339)
 	agg := c.windows[key]
@@ -497,6 +598,18 @@ func (c *collector) flush(ctx context.Context, agg *aggregate) error {
 	if agg.empty() {
 		return nil
 	}
+	temperature := c.filterMetric(agg.SensorMAC, "temperature_c", agg.Window, nullableMedianFloat(agg.TemperatureC))
+	humidity := c.filterMetric(agg.SensorMAC, "humidity_percent", agg.Window, nullableMedianFloat(agg.HumidityPercent))
+	battery := c.filterMetric(agg.SensorMAC, "battery_percent", agg.Window, nullableMedianFloat(agg.BatteryPercent))
+	rssi := c.filterMetric(agg.SensorMAC, "rssi_dbm", agg.Window, nullableMedianFloat(agg.RSSI))
+	pressure := c.filterMetric(agg.SensorMAC, "pressure_hpa", agg.Window, nullableMedianFloat(agg.PressureHPa))
+	co2 := c.filterMetric(agg.SensorMAC, "co2_ppm", agg.Window, nullableMedianFloat(agg.CO2PPM))
+	lux := nullableMedianFloat(agg.Lux)
+	etvoc := c.filterMetric(agg.SensorMAC, "etvoc", agg.Window, nullableMedianFloat(agg.ETVOC))
+	if temperature == nil && humidity == nil && battery == nil && rssi == nil &&
+		pressure == nil && co2 == nil && lux == nil && etvoc == nil {
+		return nil
+	}
 	_, err := c.db.Exec(ctx, `
 		INSERT INTO sensor_minute (
 			ts, mac, temperature_c, humidity_percent, battery_percent,
@@ -514,20 +627,65 @@ func (c *collector) flush(ctx context.Context, agg *aggregate) error {
 			etvoc = EXCLUDED.etvoc,
 			inserted_at = now()
 	`, agg.Window, agg.SensorMAC,
-		nullableMedian(agg.TemperatureC),
-		nullableMedian(agg.HumidityPercent),
-		nullableMedian(agg.BatteryPercent),
-		nullableMedian(agg.RSSI),
-		nullableMedian(agg.PressureHPa),
-		nullableMedian(agg.CO2PPM),
-		nullableMedian(agg.Lux),
-		nullableMedian(agg.ETVOC),
+		nullablePtr(temperature),
+		nullablePtr(humidity),
+		nullablePtr(battery),
+		nullablePtr(rssi),
+		nullablePtr(pressure),
+		nullablePtr(co2),
+		nullablePtr(lux),
+		nullablePtr(etvoc),
 	)
 	if err != nil {
 		return fmt.Errorf("insert %s %s: %w", agg.SensorMAC, agg.Window.Format(time.RFC3339), err)
 	}
 	log.Printf("flushed sensor=%s minute=%s", agg.SensorMAC, agg.Window.Format(time.RFC3339))
 	return nil
+}
+
+func (c *collector) filterMetric(mac string, name string, ts time.Time, value *float64) *float64 {
+	if value == nil || !c.outliers.Enabled {
+		return value
+	}
+	threshold, ok := c.outliers.Thresholds[name]
+	if !ok || threshold <= 0 || c.outliers.HistorySize <= 0 {
+		return value
+	}
+	if c.metricHistory[mac] == nil {
+		c.metricHistory[mac] = map[string]*metricHistory{}
+	}
+	history := c.metricHistory[mac][name]
+	if history == nil {
+		history = &metricHistory{}
+		c.metricHistory[mac][name] = history
+	}
+	if len(history.Accepted) < 3 {
+		c.acceptMetric(history, *value)
+		return value
+	}
+	baseline := median(history.Accepted)
+	if math.Abs(*value-baseline) <= threshold {
+		c.acceptMetric(history, *value)
+		return value
+	}
+	if history.Pending != nil &&
+		ts.Sub(history.Pending.TS) <= c.outliers.ConfirmWindow &&
+		math.Abs(*value-history.Pending.Value) <= threshold {
+		c.acceptMetric(history, history.Pending.Value)
+		c.acceptMetric(history, *value)
+		return value
+	}
+	history.Pending = &pendingOutlier{Value: *value, TS: ts}
+	log.Printf("skip BLE outlier sensor=%s metric=%s ts=%s value=%.3f baseline=%.3f threshold=%.3f", mac, name, ts.Format(time.RFC3339), *value, baseline, threshold)
+	return nil
+}
+
+func (c *collector) acceptMetric(history *metricHistory, value float64) {
+	history.Accepted = append(history.Accepted, value)
+	if len(history.Accepted) > c.outliers.HistorySize {
+		history.Accepted = history.Accepted[len(history.Accepted)-c.outliers.HistorySize:]
+	}
+	history.Pending = nil
 }
 
 func (agg *aggregate) empty() bool {
@@ -559,11 +717,18 @@ func ensureDevices(ctx context.Context, db *pgx.Conn, targets map[string]targetD
 	return nil
 }
 
-func nullableMedian(values []float64) any {
+func nullableMedianFloat(values []float64) *float64 {
 	if len(values) == 0 {
 		return nil
 	}
-	return median(values)
+	return floatPtr(median(values))
+}
+
+func nullablePtr(value *float64) any {
+	if value == nil {
+		return nil
+	}
+	return *value
 }
 
 func median(values []float64) float64 {
@@ -574,6 +739,10 @@ func median(values []float64) float64 {
 		return copied[mid]
 	}
 	return (copied[mid-1] + copied[mid]) / 2
+}
+
+func isFinite(value float64) bool {
+	return !math.IsNaN(value) && !math.IsInf(value, 0)
 }
 
 func max(values []float64) float64 {
