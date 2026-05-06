@@ -13,11 +13,10 @@ cmd/hm-db-maint/        rollup 更新と retention を行う DB maintenance CLI
 cmd/hm-nature-remo-collector/ Nature Remo E のスマートメーター値を DB に書き込む Go daemon
 cmd/hm-echonet-collector/ ECHONET Lite から EIBS7 の電力系値を DB に書き込む Go daemon
 cmd/hm-db-check/        PostgreSQL の最新値を簡易確認する対話 CLI
-db/                  PostgreSQL / TimescaleDB schema
-deploy/              systemd unit
-ios/                 iOS app skeleton
-tools/               調査用 Python scripts
-web/                 API server から配信する簡易Web UI
+db/                     PostgreSQL / TimescaleDB schema
+deploy/                 systemd unit
+tools/                  調査用 Python scripts
+web/                    API server から配信する簡易Web UI
 ```
 
 生成物とローカル cache は Git 管理外です。
@@ -421,14 +420,6 @@ deploy/*.service は `home-metrics` ユーザーで起動するサンプルで�
 各 service は `/etc/home-metrics/home-metrics.env` を任意の `EnvironmentFile` として読むため、API token、DB DSN、APC UPS address、ECHONET target、Nature Remo token などの環境差分は unit ファイルに直接書かず `/etc/home-metrics/home-metrics.env` 側で管理します。
 
 systemd unit の `ExecStart` は `/usr/local/bin/<binary>` を参照します。更新時は `make && sudo make install` の後、該当 service を restart します。
-
-## iOS Skeleton
-
-`ios/BLESensorApp/` に SwiftUI の最小 skeleton があります。API 接続、
-センサー一覧、最新値、alert rule、notification event 表示、APNs device
-token 登録のたたき台を含みます。実アプリでは Xcode debug build を
-`apns_environment=sandbox`、TestFlight/App Store build を
-`apns_environment=production` として `/api/ios/devices` に登録します。
 
 ## Investigation Tools
 
