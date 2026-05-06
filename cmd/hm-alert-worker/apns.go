@@ -169,14 +169,18 @@ func (n *apnsNotifier) send(ctx context.Context, db *pgx.Conn, target iosTarget,
 	if err != nil {
 		return err
 	}
+	deviceLabel := loadDeviceLabel(ctx, db, rule.MAC)
+	title, alertBody := alertContent(deviceLabel, rule.Metric, &value.Value)
 	body, err := json.Marshal(map[string]any{
 		"aps": map[string]any{
 			"alert": map[string]string{
-				"title": "BLE sensor alert",
-				"body":  alertBody(rule, value),
+				"title": title,
+				"body":  alertBody,
 			},
-			"sound": "default",
+			"sound":     "default",
+			"thread-id": "sensor:" + rule.MAC,
 		},
+		"roompulse": sensorRoutePayload(rule.MAC, rule.Metric),
 		"rule_id":   rule.ID,
 		"mac":       rule.MAC,
 		"metric":    rule.Metric,
@@ -290,6 +294,59 @@ func apnsDisableReason(statusCode int, reason string) string {
 	return fmt.Sprintf("APNs status=%d", statusCode)
 }
 
-func alertBody(rule alertRule, value latestValue) string {
-	return fmt.Sprintf("%s %s %.2f: current %.2f at %s", rule.Metric, rule.Operator, rule.Threshold, value.Value, value.TS.Format(time.RFC3339))
+func loadDeviceLabel(ctx context.Context, db *pgx.Conn, mac string) string {
+	var label string
+	if err := db.QueryRow(ctx, `
+		SELECT label
+		FROM devices
+		WHERE mac = $1
+	`, mac).Scan(&label); err == nil && strings.TrimSpace(label) != "" {
+		return label
+	}
+	return mac
+}
+
+func sensorRoutePayload(mac string, metric string) map[string]any {
+	return map[string]any{
+		"route":     "sensor_detail",
+		"device_id": mac,
+		"mac":       mac,
+		"metric":    metric,
+	}
+}
+
+func alertContent(deviceLabel string, metric string, value *float64) (string, string) {
+	name, unit, digits := alertMetricPresentation(metric)
+	title := fmt.Sprintf("%s %s alert", deviceLabel, name)
+	if value == nil {
+		return title, fmt.Sprintf("Current %s is unavailable.", name)
+	}
+	return title, fmt.Sprintf("Current %s is %s%s.", name, formatAlertValue(*value, digits), unit)
+}
+
+func alertMetricPresentation(metric string) (name string, unit string, digits int) {
+	switch metric {
+	case "temperature_c":
+		return "temperature", " °C", 1
+	case "humidity_percent":
+		return "humidity", " %", 0
+	case "battery_percent":
+		return "battery", " %", 0
+	case "lux":
+		return "illuminance", " lux", 0
+	case "pressure_hpa":
+		return "pressure", " hPa", 0
+	case "co2_ppm":
+		return "CO2", " ppm", 0
+	case "etvoc":
+		return "eTVOC", "", 0
+	case "rssi_dbm":
+		return "signal", " dBm", 0
+	default:
+		return metric, "", 1
+	}
+}
+
+func formatAlertValue(value float64, digits int) string {
+	return fmt.Sprintf("%.*f", digits, value)
 }

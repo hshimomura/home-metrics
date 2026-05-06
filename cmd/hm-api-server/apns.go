@@ -124,15 +124,19 @@ func (s *apnsTestSender) send(ctx context.Context, db *pgxpool.Pool, target apns
 	if err != nil {
 		return err
 	}
+	deviceLabel := loadDeviceLabel(ctx, db, event.MAC)
+	title, alertBody := alertContent(deviceLabel, event.Metric, event.Value)
 	body, err := json.Marshal(map[string]any{
 		"aps": map[string]any{
 			"alert": map[string]string{
-				"title": "RoomPulse Test",
-				"body":  testNotificationBody(event),
+				"title": title,
+				"body":  alertBody,
 			},
-			"sound": "default",
+			"sound":     "default",
+			"thread-id": "sensor:" + event.MAC,
 		},
 		"type":                          "test_notification",
+		"roompulse":                     sensorRoutePayload(event.MAC, event.Metric),
 		"ios_device_id":                 target.ID,
 		"notification_event_id":         event.ID,
 		"notification_event_created_at": event.CreatedAt.Format(time.RFC3339Nano),
@@ -248,16 +252,61 @@ func apnsDisableReason(statusCode int, reason string) string {
 	return fmt.Sprintf("APNs status=%d", statusCode)
 }
 
-func testNotificationBody(event testNotificationEvent) string {
-	value := "n/a"
-	if event.Value != nil {
-		value = fmt.Sprintf("%.2f", *event.Value)
+func loadDeviceLabel(ctx context.Context, db *pgxpool.Pool, mac string) string {
+	var label string
+	if err := db.QueryRow(ctx, `
+		SELECT label
+		FROM devices
+		WHERE mac = $1
+	`, mac).Scan(&label); err == nil && strings.TrimSpace(label) != "" {
+		return label
 	}
-	threshold := "n/a"
-	if event.Threshold != nil {
-		threshold = fmt.Sprintf("%.2f", *event.Threshold)
+	return mac
+}
+
+func sensorRoutePayload(mac string, metric string) map[string]any {
+	return map[string]any{
+		"route":     "sensor_detail",
+		"device_id": mac,
+		"mac":       mac,
+		"metric":    metric,
 	}
-	return fmt.Sprintf("%s %s value=%s threshold=%s at %s", event.MAC, event.Metric, value, threshold, event.TriggeredAt.Format(time.RFC3339))
+}
+
+func alertContent(deviceLabel string, metric string, value *float64) (string, string) {
+	name, unit, digits := alertMetricPresentation(metric)
+	title := fmt.Sprintf("%s %s alert", deviceLabel, name)
+	if value == nil {
+		return title, fmt.Sprintf("Current %s is unavailable.", name)
+	}
+	return title, fmt.Sprintf("Current %s is %s%s.", name, formatAlertValue(*value, digits), unit)
+}
+
+func alertMetricPresentation(metric string) (name string, unit string, digits int) {
+	switch metric {
+	case "temperature_c":
+		return "temperature", " °C", 1
+	case "humidity_percent":
+		return "humidity", " %", 0
+	case "battery_percent":
+		return "battery", " %", 0
+	case "lux":
+		return "illuminance", " lux", 0
+	case "pressure_hpa":
+		return "pressure", " hPa", 0
+	case "co2_ppm":
+		return "CO2", " ppm", 0
+	case "etvoc":
+		return "eTVOC", "", 0
+	case "rssi_dbm":
+		return "signal", " dBm", 0
+	default:
+		return metric, "", 1
+	}
+}
+
+func formatAlertValue(value float64, digits int) string {
+	return fmt.Sprintf("%.*f", digits, value)
 }
 
 func formatOptionalTime(value *time.Time) *string {
