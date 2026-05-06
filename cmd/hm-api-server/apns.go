@@ -285,9 +285,9 @@ func alertContent(deviceLabel string, metric string, value *float64) (string, st
 func alertMetricPresentation(metric string) (name string, unit string, digits int) {
 	switch metric {
 	case "temperature_c":
-		return "temperature", " °C", 1
+		return "Temp", " °C", 1
 	case "humidity_percent":
-		return "humidity", " %", 0
+		return "Hum", " %", 0
 	case "battery_percent":
 		return "battery", " %", 0
 	case "lux":
