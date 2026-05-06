@@ -105,6 +105,8 @@ CREATE TABLE IF NOT EXISTS ios_devices (
     apns_environment text NOT NULL CHECK (apns_environment IN ('sandbox', 'production')),
     device_name text,
     enabled boolean NOT NULL DEFAULT true,
+    disabled_reason text,
+    disabled_at timestamptz,
     last_seen_at timestamptz,
     created_at timestamptz NOT NULL DEFAULT now(),
     updated_at timestamptz NOT NULL DEFAULT now(),

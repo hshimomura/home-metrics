@@ -94,7 +94,7 @@
     <section>
       <h2>iOS Devices</h2>
       <table>
-        <thead><tr><th>ID</th><th>Name</th><th>Bundle</th><th>Environment</th><th>Enabled</th><th>Last Seen</th><th>Updated</th><th>Token</th><th>Action</th></tr></thead>
+        <thead><tr><th>ID</th><th>Name</th><th>Bundle</th><th>Environment</th><th>Enabled</th><th>Disabled</th><th>Last Seen</th><th>Updated</th><th>Token</th><th>Action</th></tr></thead>
         <tbody id="ios-devices"></tbody>
       </table>
     </section>
@@ -255,6 +255,11 @@
       return `${value.slice(0, 8)}...${value.slice(-8)}`;
     }
 
+    function disabledInfo(device) {
+      if (!device.disabled_reason && !device.disabled_at) return '-';
+      return [device.disabled_reason, device.disabled_at].filter(Boolean).join(' / ');
+    }
+
     function matchesVisibleDevice(item, visibleMACs) {
       const mac = (item?.mac || '').toLowerCase();
       return visibleMACs.has(mac);
@@ -368,7 +373,7 @@
         document.querySelector('#rules').innerHTML = rules.map(r => `<tr><td>${r.id}</td><td>${escapeHTML(r.mac)}</td><td>${escapeHTML(r.metric)}</td><td>${escapeHTML(r.operator)} ${escapeHTML(r.threshold)}</td><td>${Math.round(r.cooldown_seconds / 3600)}h</td><td>${escapeHTML(cell(r.last_notified_at))}</td><td>${r.enabled}</td><td>${cell(r.last_value)}</td><td><button data-reset-rule-id="${r.id}">Reset</button></td></tr>`).join('');
 
         const iosDevices = await getJSON('/api/ios/devices');
-        document.querySelector('#ios-devices').innerHTML = iosDevices.map(device => `<tr><td>${device.id}</td><td>${escapeHTML(cell(device.device_name))}</td><td>${escapeHTML(device.app_bundle_id)}</td><td>${escapeHTML(device.apns_environment)}</td><td>${device.enabled}</td><td>${escapeHTML(cell(device.last_seen_at))}</td><td>${escapeHTML(cell(device.updated_at))}</td><td title="${escapeHTML(device.apns_device_token)}">${escapeHTML(shortToken(device.apns_device_token))}</td><td><button data-test-ios-device-id="${device.id}" ${device.enabled ? '' : 'disabled'}>Test</button> <button data-delete-ios-device-id="${device.id}">Delete</button></td></tr>`).join('');
+        document.querySelector('#ios-devices').innerHTML = iosDevices.map(device => `<tr><td>${device.id}</td><td>${escapeHTML(cell(device.device_name))}</td><td>${escapeHTML(device.app_bundle_id)}</td><td>${escapeHTML(device.apns_environment)}</td><td>${device.enabled}</td><td>${escapeHTML(disabledInfo(device))}</td><td>${escapeHTML(cell(device.last_seen_at))}</td><td>${escapeHTML(cell(device.updated_at))}</td><td title="${escapeHTML(device.apns_device_token)}">${escapeHTML(shortToken(device.apns_device_token))}</td><td><button data-test-ios-device-id="${device.id}" ${device.enabled ? '' : 'disabled'}>Test</button> <button data-delete-ios-device-id="${device.id}">Delete</button></td></tr>`).join('');
 
         const energy = await getJSON('/api/energy/latest');
         energyCache = energy;

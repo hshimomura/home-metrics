@@ -535,6 +535,8 @@ Response `200`:
     "apns_environment": "sandbox",
     "device_name": "iPhone",
     "enabled": true,
+    "disabled_reason": "BadDeviceToken",
+    "disabled_at": "2026-05-06T08:10:00+09:00",
     "last_seen_at": "2026-05-06T08:00:00+09:00",
     "created_at": "2026-05-06T07:00:00+09:00",
     "updated_at": "2026-05-06T08:00:00+09:00"
@@ -542,7 +544,10 @@ Response `200`:
 ]
 ```
 
-`device_name` と `last_seen_at` は無い場合に省略されます。
+`device_name`, `disabled_reason`, `disabled_at`, `last_seen_at` は無い場合に
+省略されます。APNs が `BadDeviceToken`, `Unregistered`, `410 Gone` を返した
+場合は backend が device を `enabled=false` にし、`disabled_reason` と
+`disabled_at` を保存します。
 
 ### POST /api/ios/devices
 
@@ -629,7 +634,7 @@ test payload は `notification_events.created_at =
 送信対象です。APNs endpoint は device の `apns_environment` に応じて
 `sandbox` / `production` を自動で切り替えます。APNs が
 `BadDeviceToken` や `Unregistered` を返した場合は、その device を
-`enabled=false` にします。
+`enabled=false` にし、`disabled_reason` と `disabled_at` を保存します。
 
 Response `200`:
 
