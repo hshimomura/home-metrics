@@ -2,7 +2,6 @@
 
 Home Metrics は、家庭や小規模ラボ向けのセンサー・電力・UPS メトリクスを PostgreSQL / TimescaleDB に保存し、API/Web UI/通知基盤から参照するためのツール群です。BLE collector、ECHONET Lite、Nature Remo、apcupsd collector を含みます。
 
-センサーの永続キーは BLE MAC address です。Cisco Spaces 側の label は後から変わる可能性があるため、DB の主キーや集計キーには使いません。
 
 ## Directory Layout
 
@@ -204,6 +203,12 @@ build の token は `sandbox`、TestFlight/App Store build の token は
 `production` として登録します。送信対象は `ios_devices.app_bundle_id` が
 `APNS_BUNDLE_ID` に一致する有効な token です。
 
+APNs の公開向け設定、sandbox/production の切り替え、秘密情報の扱いは
+[docs/apns.md](docs/apns.md) を参照してください。`APNS_ENVIRONMENT` は
+互換メモとして残っている環境でも backend では使いません。`.p8` key、
+device token、実 bundle ID、Key ID、Team ID は public repository に
+commit しないでください。
+
 例: Bed の温度が 35 度を超えたら 24 時間は再通知しないルール。
 
 ```sql
@@ -392,7 +397,11 @@ systemd unit の `ExecStart` は `/usr/local/bin/<binary>` を参照します。
 
 ## iOS Skeleton
 
-`ios/BLESensorApp/` に SwiftUI の最小 skeleton があります。Apple Developer Program 登録前でも、API接続、センサー一覧、最新値、alert rule、notification event の表示までは進められる構成です。APNs device token 登録は `APIClient.registerDeviceToken` に差し込む想定です。
+`ios/BLESensorApp/` に SwiftUI の最小 skeleton があります。API 接続、
+センサー一覧、最新値、alert rule、notification event 表示、APNs device
+token 登録のたたき台を含みます。実アプリでは Xcode debug build を
+`apns_environment=sandbox`、TestFlight/App Store build を
+`apns_environment=production` として `/api/ios/devices` に登録します。
 
 ## Investigation Tools
 

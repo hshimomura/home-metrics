@@ -5,17 +5,20 @@ API の詳細な request / response は [api.md](api.md) を参照してくだ�
 
 ## Goal
 
-BLE sensor、電力、UPS の値をクライアントで確認できるようにし、将来的には
+BLE sensor、電力、UPS の値をクライアントで確認できるようにし、
 ユーザーが設定したしきい値を超えたときに Apple Push Notification service
 経由で iOS app へ user-visible push notification を送る。
 
-Apple Developer Program 登録、APNs key、Bundle ID、実機 push token の本番確認は
-まだ完了していないため、現在は APNs 実送信前の開発段階として進める。
+APNs は backend 側の実送信、sandbox/production routing、device token 登録 API
+まで実装済みです。Apple Developer account や bundle ID などの実値は
+public repository に含めず、各 deployment の `/etc/home-metrics/home-metrics.env`
+で管理します。
 
 ## Current Stage
 
-現在の段階は「API 接続、値の表示、しきい値 rule 管理、dry-run 通知履歴確認」
-までをクライアント開発できる状態です。
+現在の段階は「API 接続、値の表示、しきい値 rule 管理、通知履歴確認、
+APNs device token 登録、sandbox/production push test」までを
+クライアント開発できる状態です。
 
 | Area | Status | Notes |
 | --- | --- | --- |
@@ -24,10 +27,10 @@ Apple Developer Program 登録、APNs key、Bundle ID、実機 push token の本
 | Energy collection | Implemented | `echonet`, `apcupsd`, `nature_remo` は稼働中 |
 | REST API | Implemented | `cmd/hm-api-server`。仕様は `docs/api.md` |
 | Alert rule DB/API | Implemented | single user `user_id=1` 前提 |
-| Alert worker | Implemented, dry-run active | しきい値超過を `notification_events.status=dry_run` として記録 |
-| APNs sender | Code exists, not operational | Apple Developer/APNs 設定後に有効化 |
+| Alert worker | Implemented | `ALERT_WORKER_DRY_RUN` で dry-run / APNs 実送信を切替 |
+| APNs sender | Implemented | device の `apns_environment` ごとに sandbox / production endpoint へ送信 |
 | iOS skeleton | Minimal | API 接続、device/rule/event 表示のたたき台あり |
-| iOS push permission/token registration | Not implemented in app UI/lifecycle | `APIClient.registerDeviceToken` は用意済み |
+| iOS push permission/token registration | Client responsibility | `/api/ios/devices` に token と environment を登録 |
 | Alert rule editing UI | Not implemented | API は実装済み |
 | Web graph UI | Implemented | `web/index.html` で Sensor/Energy の 1d 詳細グラフを表示 |
 | iOS graph UI | Not implemented | BLE/Energy series API は実装済み |
@@ -79,7 +82,7 @@ iOS app
 - hm-alert-worker でしきい値を評価する。
 - cooldown を適用して通知頻度を制御する。
 - 通知結果を `notification_events` に記録する。
-- APNs 有効化後、APNs provider として push を送信する。
+- APNs provider として push を送信する。
 - APNs から invalid token 応答が返った場合、該当 token を disabled にする。
 - API token による簡易認証を提供する。
 
@@ -111,6 +114,8 @@ iOS app
 - token 更新時、再インストール時、端末変更時に backend 登録を更新する。
 - push notification を受信したとき、該当 rule / sensor / metric へ遷移する。
 - backend が dry-run の間は `notification_events` を使って通知予定を確認する。
+- Xcode Debug build は `apns_environment=sandbox`、TestFlight/App Store build は
+  `apns_environment=production` として登録する。
 
 クライアント側では持たない方針:
 
@@ -182,7 +187,8 @@ Client tasks:
 Server status:
 
 - API 実装済み。
-- hm-alert-worker dry-run 稼働中。
+- hm-alert-worker 実装済み。dry-run / APNs 実送信は deployment の
+  `ALERT_WORKER_DRY_RUN` で切り替える。
 
 ### Phase 4: Dry-run Notification Verification
 
@@ -198,11 +204,13 @@ Client tasks:
 Server status:
 
 - dry-run event 記録は実装済み。
-- APNs 本番設定前の環境では hm-alert-worker.service を ALERT_WORKER_DRY_RUN=true で稼働させる。
+- APNs 実送信を止めたい環境では hm-alert-worker.service を
+  `ALERT_WORKER_DRY_RUN=true` で稼働させる。
 
 ### Phase 5: APNs Device Registration
 
-目的: Apple Developer 登録後に push 送信できる前段を作る。
+目的: push 送信できる前段として、端末 token と APNs environment を
+backend に登録する。
 
 Client tasks:
 
@@ -217,7 +225,8 @@ Client tasks:
 Server status:
 
 - `/api/ios/devices` API は実装済み。
-- APNs 実送信に必要な `.p8`, Key ID, Team ID, Bundle ID は未設定。
+- APNs credential は repository には含めない。各 deployment の
+  `/etc/home-metrics/home-metrics.env` に設定する。
 
 ### Phase 6: APNs Production/Sandbox Send
 
@@ -232,7 +241,6 @@ Client tasks:
 
 Server tasks:
 
-- Apple Developer Program 登録を完了する。
 - APNs Auth Key `.p8` を安全な場所に配置する。
 - `APNS_KEY_FILE`, `APNS_KEY_ID`, `APNS_TEAM_ID`, `APNS_BUNDLE_ID` を設定する。
 - `ALERT_WORKER_DRY_RUN=false` に切り替える。
@@ -242,8 +250,9 @@ Server tasks:
 
 Server status:
 
-- APNs sender code は初期実装済み。
-- 運用設定は未完了。
+- APNs sender code は実装済み。
+- sandbox / production endpoint は device 登録ごとに自動選択する。
+- `APNS_ENVIRONMENT` は backend では使わない。
 
 ## Current Backend Facts For Client
 
@@ -372,9 +381,11 @@ Error handling:
 
 ### APNs Operational Decisions
 
-- APNs Auth Key `.p8` の保管場所。
-- sandbox と production の hm-alert-worker を分けるか。
-- Bundle ID と `APNS_BUNDLE_ID` の最終値。
+- APNs Auth Key `.p8` は repository 外に置く。
+- sandbox と production の hm-alert-worker は分けない。device 登録の
+  `apns_environment` で backend が endpoint を切り替える。
+- Bundle ID と `APNS_BUNDLE_ID` は deployment ごとの実値として
+  `/etc/home-metrics/home-metrics.env` に置く。
 - invalid token の扱い。
   - backend は invalid token を disabled にする実装。
   - client 側で再登録導線が必要か確認する。
@@ -395,6 +406,7 @@ Error handling:
 4. device latest と energy latest / series の read-only UI を作る。
 5. alert rule list / create / edit / delete を作る。
 6. notification event list を作り、dry-run で動作確認する。
-7. Apple Developer 登録後に APNs permission/token registration を接続する。
+7. APNs permission/token registration を接続し、Debug は sandbox、
+   TestFlight/App Store は production として登録する。
 
-この順序なら Apple Developer 登録を待たずに、push 以外の大半を進められる。
+この順序なら push 受信前でも、API と通知履歴の大半を先に固められる。
