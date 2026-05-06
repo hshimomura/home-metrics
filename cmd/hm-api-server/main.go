@@ -1087,8 +1087,8 @@ func (api *apiServer) handleTestIOSDeviceNotification(w http.ResponseWriter, r *
 		writeError(w, http.StatusBadRequest, "ios device is disabled")
 		return
 	}
-	if target.AppBundleID != api.apns.bundleID || target.APNSEnvironment != api.apns.environment {
-		writeError(w, http.StatusBadRequest, "ios device does not match APNs bundle/environment")
+	if target.AppBundleID != api.apns.bundleID {
+		writeError(w, http.StatusBadRequest, "ios device does not match APNs bundle")
 		return
 	}
 	event, err := api.loadTestNotificationEvent(r.Context())
