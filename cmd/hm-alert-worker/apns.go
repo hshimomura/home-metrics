@@ -38,20 +38,19 @@ func (dryRunNotifier) Notify(context.Context, *pgx.Conn, alertRule, latestValue,
 }
 
 type apnsNotifier struct {
-	client      *http.Client
-	keyID       string
-	teamID      string
-	bundleID    string
-	environment string
-	privateKey  *ecdsa.PrivateKey
-	host        string
-	token       string
-	tokenIAT    time.Time
+	client     *http.Client
+	keyID      string
+	teamID     string
+	bundleID   string
+	privateKey *ecdsa.PrivateKey
+	token      string
+	tokenIAT   time.Time
 }
 
 type iosTarget struct {
-	ID    int64
-	Token string
+	ID          int64
+	Token       string
+	Environment string
 }
 
 type apnsErrorResponse struct {
@@ -67,34 +66,21 @@ func newNotifierFromEnv(dryRun bool, client *http.Client) (notifier, error) {
 	keyID := strings.TrimSpace(os.Getenv("APNS_KEY_ID"))
 	teamID := strings.TrimSpace(os.Getenv("APNS_TEAM_ID"))
 	bundleID := strings.TrimSpace(os.Getenv("APNS_BUNDLE_ID"))
-	environment := strings.TrimSpace(os.Getenv("APNS_ENVIRONMENT"))
 	keyFile := strings.TrimSpace(os.Getenv("APNS_KEY_FILE"))
-	if environment == "" {
-		environment = "sandbox"
-	}
 	if keyID == "" || teamID == "" || bundleID == "" || keyFile == "" {
 		return nil, errors.New("APNS_KEY_ID, APNS_TEAM_ID, APNS_BUNDLE_ID, and APNS_KEY_FILE are required when ALERT_WORKER_DRY_RUN=false")
-	}
-	if environment != "sandbox" && environment != "production" {
-		return nil, errors.New("APNS_ENVIRONMENT must be sandbox or production")
 	}
 
 	privateKey, err := loadAPNSPrivateKey(keyFile)
 	if err != nil {
 		return nil, err
 	}
-	host := apnsSandboxHost
-	if environment == "production" {
-		host = apnsProductionHost
-	}
 	return &apnsNotifier{
-		client:      client,
-		keyID:       keyID,
-		teamID:      teamID,
-		bundleID:    bundleID,
-		environment: environment,
-		privateKey:  privateKey,
-		host:        host,
+		client:     client,
+		keyID:      keyID,
+		teamID:     teamID,
+		bundleID:   bundleID,
+		privateKey: privateKey,
 	}, nil
 }
 
@@ -119,7 +105,7 @@ func loadAPNSPrivateKey(path string) (*ecdsa.PrivateKey, error) {
 }
 
 func (n *apnsNotifier) Mode() string {
-	return "apns-" + n.environment
+	return "apns-sandbox-production"
 }
 
 func (n *apnsNotifier) Notify(ctx context.Context, db *pgx.Conn, rule alertRule, value latestValue, now time.Time) (notificationResult, error) {
@@ -128,7 +114,7 @@ func (n *apnsNotifier) Notify(ctx context.Context, db *pgx.Conn, rule alertRule,
 		return notificationResult{}, err
 	}
 	if len(targets) == 0 {
-		message := "no enabled iOS devices for APNs bundle/environment"
+		message := "no enabled iOS devices for APNs bundle"
 		return notificationResult{Status: "skipped", ErrorMessage: &message}, nil
 	}
 
@@ -155,14 +141,13 @@ func (n *apnsNotifier) Notify(ctx context.Context, db *pgx.Conn, rule alertRule,
 
 func (n *apnsNotifier) loadTargets(ctx context.Context, db *pgx.Conn, userID int64) ([]iosTarget, error) {
 	rows, err := db.Query(ctx, `
-		SELECT id, apns_device_token
+		SELECT id, apns_device_token, apns_environment
 		FROM ios_devices
 		WHERE user_id = $1
 			AND enabled
 			AND app_bundle_id = $2
-			AND apns_environment = $3
 		ORDER BY id
-	`, userID, n.bundleID, n.environment)
+	`, userID, n.bundleID)
 	if err != nil {
 		return nil, err
 	}
@@ -171,7 +156,7 @@ func (n *apnsNotifier) loadTargets(ctx context.Context, db *pgx.Conn, userID int
 	targets := []iosTarget{}
 	for rows.Next() {
 		var target iosTarget
-		if err := rows.Scan(&target.ID, &target.Token); err != nil {
+		if err := rows.Scan(&target.ID, &target.Token, &target.Environment); err != nil {
 			return nil, err
 		}
 		targets = append(targets, target)
@@ -205,7 +190,7 @@ func (n *apnsNotifier) send(ctx context.Context, db *pgx.Conn, target iosTarget,
 	request, err := http.NewRequestWithContext(
 		ctx,
 		http.MethodPost,
-		n.host+"/3/device/"+target.Token,
+		apnsHost(target.Environment)+"/3/device/"+target.Token,
 		bytes.NewReader(body),
 	)
 	if err != nil {
@@ -286,6 +271,13 @@ func appendFixedWidth(r *big.Int, s *big.Int, width int) []byte {
 	r.FillBytes(signature[:width])
 	s.FillBytes(signature[width:])
 	return signature
+}
+
+func apnsHost(environment string) string {
+	if environment == "production" {
+		return apnsProductionHost
+	}
+	return apnsSandboxHost
 }
 
 func alertBody(rule alertRule, value latestValue) string {

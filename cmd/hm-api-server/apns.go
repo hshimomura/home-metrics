@@ -29,15 +29,13 @@ const (
 )
 
 type apnsTestSender struct {
-	client      *http.Client
-	keyID       string
-	teamID      string
-	bundleID    string
-	environment string
-	privateKey  *ecdsa.PrivateKey
-	host        string
-	token       string
-	tokenIAT    time.Time
+	client     *http.Client
+	keyID      string
+	teamID     string
+	bundleID   string
+	privateKey *ecdsa.PrivateKey
+	token      string
+	tokenIAT   time.Time
 }
 
 type apnsTestTarget struct {
@@ -57,33 +55,20 @@ func newAPNSTestSenderFromEnv(client *http.Client) (*apnsTestSender, error) {
 	keyID := strings.TrimSpace(os.Getenv("APNS_KEY_ID"))
 	teamID := strings.TrimSpace(os.Getenv("APNS_TEAM_ID"))
 	bundleID := strings.TrimSpace(os.Getenv("APNS_BUNDLE_ID"))
-	environment := strings.TrimSpace(os.Getenv("APNS_ENVIRONMENT"))
 	keyFile := strings.TrimSpace(os.Getenv("APNS_KEY_FILE"))
-	if environment == "" {
-		environment = "sandbox"
-	}
 	if keyID == "" || teamID == "" || bundleID == "" || keyFile == "" {
 		return nil, errors.New("APNS_KEY_ID, APNS_TEAM_ID, APNS_BUNDLE_ID, and APNS_KEY_FILE are required")
-	}
-	if environment != "sandbox" && environment != "production" {
-		return nil, errors.New("APNS_ENVIRONMENT must be sandbox or production")
 	}
 	privateKey, err := loadAPNSPrivateKey(keyFile)
 	if err != nil {
 		return nil, err
 	}
-	host := apnsSandboxHost
-	if environment == "production" {
-		host = apnsProductionHost
-	}
 	return &apnsTestSender{
-		client:      client,
-		keyID:       keyID,
-		teamID:      teamID,
-		bundleID:    bundleID,
-		environment: environment,
-		privateKey:  privateKey,
-		host:        host,
+		client:     client,
+		keyID:      keyID,
+		teamID:     teamID,
+		bundleID:   bundleID,
+		privateKey: privateKey,
 	}, nil
 }
 
@@ -165,7 +150,7 @@ func (s *apnsTestSender) send(ctx context.Context, db *pgxpool.Pool, target apns
 	if err != nil {
 		return err
 	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, s.host+"/3/device/"+target.Token, bytes.NewReader(body))
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, apnsHost(target.APNSEnvironment)+"/3/device/"+target.Token, bytes.NewReader(body))
 	if err != nil {
 		return err
 	}
@@ -244,6 +229,13 @@ func appendFixedWidth(r *big.Int, s *big.Int, width int) []byte {
 	r.FillBytes(signature[:width])
 	s.FillBytes(signature[width:])
 	return signature
+}
+
+func apnsHost(environment string) string {
+	if environment == "production" {
+		return apnsProductionHost
+	}
+	return apnsSandboxHost
 }
 
 func testNotificationBody(event testNotificationEvent) string {

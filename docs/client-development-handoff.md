@@ -225,7 +225,7 @@ Server status:
 
 Client tasks:
 
-- Bundle ID と APNs environment を backend 設定と一致させる。
+- Bundle ID を backend 設定と一致させる。
 - sandbox build では `apns_environment=sandbox` を登録する。
 - production/TestFlight/App Store build では `production` を登録する。
 - push 受信時の画面遷移を実装する。
@@ -234,11 +234,11 @@ Server tasks:
 
 - Apple Developer Program 登録を完了する。
 - APNs Auth Key `.p8` を安全な場所に配置する。
-- `APNS_KEY_FILE`, `APNS_KEY_ID`, `APNS_TEAM_ID`, `APNS_BUNDLE_ID`,
-  `APNS_ENVIRONMENT` を設定する。
+- `APNS_KEY_FILE`, `APNS_KEY_ID`, `APNS_TEAM_ID`, `APNS_BUNDLE_ID` を設定する。
 - `ALERT_WORKER_DRY_RUN=false` に切り替える。
 - sandbox で実機通知を確認する。
-- production/TestFlight 用の環境を分けるか決める。
+- sandbox と production は device 登録の `apns_environment` に応じて
+  backend が APNs endpoint を切り替える。
 
 Server status:
 

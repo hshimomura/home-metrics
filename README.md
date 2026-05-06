@@ -195,11 +195,14 @@ APNS_KEY_FILE=/path/to/AuthKey_XXXXXXXXXX.p8 \
 APNS_KEY_ID=XXXXXXXXXX \
 APNS_TEAM_ID=YYYYYYYYYY \
 APNS_BUNDLE_ID=org.example.home-metrics \
-APNS_ENVIRONMENT=sandbox \
 hm-alert-worker
 ```
 
-`APNS_ENVIRONMENT` は `sandbox` または `production` です。`ios_devices.app_bundle_id` と `ios_devices.apns_environment` が APNs 設定に一致する有効な token にだけ送信します。
+APNs Auth Key は sandbox / production で共通です。送信先 endpoint は
+`ios_devices.apns_environment` に応じて自動で切り替えます。Xcode debug
+build の token は `sandbox`、TestFlight/App Store build の token は
+`production` として登録します。送信対象は `ios_devices.app_bundle_id` が
+`APNS_BUNDLE_ID` に一致する有効な token です。
 
 例: Bed の温度が 35 度を超えたら 24 時間は再通知しないルール。
 

@@ -625,8 +625,9 @@ Errors:
 test payload は `notification_events.created_at =
 2026-05-06T14:13:16.978914+09:00` の event を元に作ります。
 
-サーバ側の `APNS_BUNDLE_ID` と `APNS_ENVIRONMENT` に一致し、かつ
-`enabled=true` の device のみ送信対象です。APNs が
+サーバ側の `APNS_BUNDLE_ID` に一致し、かつ `enabled=true` の device のみ
+送信対象です。APNs endpoint は device の `apns_environment` に応じて
+`sandbox` / `production` を自動で切り替えます。APNs が
 `BadDeviceToken` や `Unregistered` を返した場合は、その device を
 `enabled=false` にします。
 
@@ -651,7 +652,7 @@ Errors:
 | ---: | --- |
 | 400 | `invalid id` |
 | 400 | `ios device is disabled` |
-| 400 | `ios device does not match APNs bundle/environment` |
+| 400 | `ios device does not match APNs bundle` |
 | 404 | `ios device not found` |
 | 404 | `test notification event not found` |
 | 500 | `query test notification event` |

@@ -98,3 +98,15 @@ func TestAPNSJWT(t *testing.T) {
 		t.Fatal("jwt was not cached inside 50 minutes")
 	}
 }
+
+func TestAPNSHost(t *testing.T) {
+	if got := apnsHost("production"); got != apnsProductionHost {
+		t.Fatalf("production host = %q, want %q", got, apnsProductionHost)
+	}
+	if got := apnsHost("sandbox"); got != apnsSandboxHost {
+		t.Fatalf("sandbox host = %q, want %q", got, apnsSandboxHost)
+	}
+	if got := apnsHost(""); got != apnsSandboxHost {
+		t.Fatalf("empty environment host = %q, want %q", got, apnsSandboxHost)
+	}
+}
