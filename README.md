@@ -168,13 +168,30 @@ BlueZ D-Bus discovery
   -> 対象 MAC の ServiceData を取得
   -> FE6A / FFE1 / FEAA payload を decode
   -> センサー/MAC ごとに 1 分 window へ蓄積
-  -> 各項目の中央値を sensor_minute に upsert
+  -> 各項目の中央値を出し、単発スパイクを除外して sensor_minute に upsert
 ```
 
 注意:
 
 - 一部の Minew 系センサーは `0000ffe1-0000-1000-8000-00805f9b34fb` の ServiceData を使います。
 - これらは `temperature_c`, `humidity_percent`, `battery_percent` を `ffe1` フォーマットから読み取ります。
+- `BLE_OUTLIER_FILTER=true` の場合、直近正常値から大きく外れた 1 分値は保存しません。
+  同じ方向の値が連続した場合は実際の変化として受け入れます。
+
+主な BLE 外れ値フィルタ設定:
+
+```text
+BLE_OUTLIER_FILTER
+BLE_OUTLIER_HISTORY_SIZE
+BLE_OUTLIER_CONFIRM_WINDOW
+BLE_OUTLIER_TEMP_DELTA
+BLE_OUTLIER_HUMIDITY_DELTA
+BLE_OUTLIER_BATTERY_DELTA
+BLE_OUTLIER_PRESSURE_DELTA
+BLE_OUTLIER_CO2_DELTA
+BLE_OUTLIER_ETVOC_DELTA
+BLE_OUTLIER_RSSI_DELTA
+```
 
 保存する値:
 
