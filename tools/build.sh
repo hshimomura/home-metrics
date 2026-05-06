@@ -13,6 +13,7 @@ bins=(
   hm-alert-worker
   hm-api-server
   hm-db-maint
+  hm-cisco-spaces-collector
   hm-nature-remo-collector
   hm-echonet-collector
   hm-apcupsd-collector

@@ -78,6 +78,11 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
+	if source := strings.ToLower(envString("SENSOR_INGEST_SOURCE", "ble")); source != "ble" {
+		log.Printf("BLE collector disabled by SENSOR_INGEST_SOURCE=%s", source)
+		return
+	}
+
 	dsn := envString("BLE_DB_DSN", defaultDBDSN)
 	pollInterval := envDuration("BLE_POLL_INTERVAL", 2*time.Second)
 	adapterPath := defaultAdapterPath
