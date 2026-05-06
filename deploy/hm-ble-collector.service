@@ -1,0 +1,21 @@
+[Unit]
+Description=BLE sensor collector
+After=bluetooth.service postgresql.service
+Wants=bluetooth.service postgresql.service
+
+[Service]
+Type=simple
+User=home_metrics
+Group=home_metrics
+SupplementaryGroups=bluetooth
+WorkingDirectory=/var/lib/home-metrics
+Environment=BLE_ADAPTER=/org/bluez/hci0
+Environment=BLE_POLL_INTERVAL=2s
+Environment=BLE_SENSORS_FILE=/etc/home-metrics/sensors.json
+EnvironmentFile=-/etc/home-metrics/home-metrics.env
+ExecStart=/usr/local/bin/hm-ble-collector
+Restart=always
+RestartSec=5s
+
+[Install]
+WantedBy=multi-user.target

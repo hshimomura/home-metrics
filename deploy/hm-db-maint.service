@@ -1,0 +1,14 @@
+[Unit]
+Description=Home Metrics database maintenance
+After=postgresql.service
+Wants=postgresql.service
+
+[Service]
+Type=oneshot
+User=home_metrics
+Group=home_metrics
+WorkingDirectory=/var/lib/home-metrics
+Environment=DB_MAINT_REFRESH_LOOKBACK=336h
+Environment=DB_MAINT_RETAIN_MINUTE=336h
+EnvironmentFile=-/etc/home-metrics/home-metrics.env
+ExecStart=/usr/local/bin/hm-db-maint

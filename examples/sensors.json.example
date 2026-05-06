@@ -1,0 +1,18 @@
+{
+  "devices": [
+    {
+      "mac": "aa:bb:cc:dd:ee:01",
+      "label": "Living room",
+      "device_type": "Minew",
+      "location": "Living room",
+      "enabled": true
+    },
+    {
+      "mac": "aa:bb:cc:dd:ee:02",
+      "label": "Bedroom CO2",
+      "device_type": "HibouCO2",
+      "location": "Bedroom",
+      "enabled": true
+    }
+  ]
+}

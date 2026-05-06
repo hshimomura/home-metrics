@@ -1,0 +1,18 @@
+[Unit]
+Description=Home Metrics API server
+After=postgresql.service
+Wants=postgresql.service
+
+[Service]
+Type=simple
+User=home_metrics
+Group=home_metrics
+WorkingDirectory=/var/lib/home-metrics
+Environment=API_ADDR=:8080
+EnvironmentFile=-/etc/home-metrics/home-metrics.env
+ExecStart=/usr/local/bin/hm-api-server
+Restart=always
+RestartSec=5s
+
+[Install]
+WantedBy=multi-user.target
