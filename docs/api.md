@@ -122,8 +122,8 @@ failed
 skipped
 ```
 
-APNs 本番設定前の環境では、hm-alert-worker は
-`dry_run` で動かす構成です。
+APNs 実送信を止めたい環境では、hm-alert-worker を
+`ALERT_WORKER_DRY_RUN=true` で動かします。
 
 ## Endpoints
 
@@ -535,8 +535,6 @@ Response `200`:
     "apns_environment": "sandbox",
     "device_name": "iPhone",
     "enabled": true,
-    "disabled_reason": "BadDeviceToken",
-    "disabled_at": "2026-05-06T08:10:00+09:00",
     "last_seen_at": "2026-05-06T08:00:00+09:00",
     "created_at": "2026-05-06T07:00:00+09:00",
     "updated_at": "2026-05-06T08:00:00+09:00"
@@ -627,8 +625,9 @@ Errors:
 ### POST /api/ios/devices/{id}/test-notification
 
 指定した iOS device に APNs test notification を送信します。
-test payload は `notification_events.created_at =
-2026-05-06T14:13:16.978914+09:00` の event を元に作ります。
+test payload はデフォルトでは最新の `notification_events` を元に作ります。
+特定の event を使いたい環境では、サーバ側で
+`APNS_TEST_NOTIFICATION_EVENT_CREATED_AT` に RFC3339 timestamp を設定します。
 
 サーバ側の `APNS_BUNDLE_ID` に一致し、かつ `enabled=true` の device のみ
 送信対象です。APNs endpoint は device の `apns_environment` に応じて
@@ -642,12 +641,12 @@ Response `200`:
 {
   "id": 1,
   "device_name": "iPhone",
-  "app_bundle_id": "jp.ioslab.RoomPulse",
-  "apns_environment": "production",
+  "app_bundle_id": "org.example.home-metrics",
+  "apns_environment": "sandbox",
   "notification_event_id": 42,
-  "notification_event_created_at": "2026-05-06T14:13:16.978914+09:00",
+  "notification_event_created_at": "2026-01-02T03:04:05Z",
   "status": "sent",
-  "sent_at": "2026-05-06T14:00:00+09:00"
+  "sent_at": "2026-01-02T03:05:00Z"
 }
 ```
 

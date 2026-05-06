@@ -24,7 +24,7 @@ const (
 	defaultDBDSN  = "dbname=ble_sensors host=/var/run/postgresql"
 	defaultUserID = int64(1)
 
-	testNotificationEventCreatedAt = "2026-05-06T14:13:16.978914+09:00"
+	testNotificationEventCreatedAtEnv = "APNS_TEST_NOTIFICATION_EVENT_CREATED_AT"
 )
 
 type apiServer struct {
@@ -1130,9 +1130,31 @@ func (api *apiServer) handleTestIOSDeviceNotification(w http.ResponseWriter, r *
 }
 
 func (api *apiServer) loadTestNotificationEvent(ctx context.Context) (testNotificationEvent, error) {
-	eventCreatedAt, err := time.Parse(time.RFC3339Nano, testNotificationEventCreatedAt)
-	if err != nil {
-		return testNotificationEvent{}, err
+	if rawCreatedAt := strings.TrimSpace(os.Getenv(testNotificationEventCreatedAtEnv)); rawCreatedAt != "" {
+		eventCreatedAt, err := time.Parse(time.RFC3339Nano, rawCreatedAt)
+		if err != nil {
+			return testNotificationEvent{}, fmt.Errorf("parse %s: %w", testNotificationEventCreatedAtEnv, err)
+		}
+		row := api.db.QueryRow(ctx, `
+			SELECT
+				id,
+				alert_rule_id,
+				user_id,
+				mac,
+				metric,
+				value,
+				threshold,
+				triggered_at,
+				sent_at,
+				status,
+				error_message,
+				created_at
+			FROM notification_events
+			WHERE user_id = $1
+				AND created_at = $2
+			LIMIT 1
+		`, defaultUserID, eventCreatedAt)
+		return scanTestNotificationEvent(row)
 	}
 	row := api.db.QueryRow(ctx, `
 		SELECT
@@ -1149,9 +1171,10 @@ func (api *apiServer) loadTestNotificationEvent(ctx context.Context) (testNotifi
 			error_message,
 			created_at
 		FROM notification_events
-		WHERE created_at = $1
+		WHERE user_id = $1
+		ORDER BY created_at DESC
 		LIMIT 1
-	`, eventCreatedAt)
+	`, defaultUserID)
 	return scanTestNotificationEvent(row)
 }
 
