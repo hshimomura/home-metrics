@@ -1,0 +1,9 @@
+#!/bin/sh
+set -eu
+
+interval="${DB_MAINT_INTERVAL:-1h}"
+
+while true; do
+  hm-db-maint
+  sleep "$interval"
+done

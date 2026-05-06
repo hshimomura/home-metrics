@@ -66,6 +66,8 @@ func main() {
 	}
 	apiURL := envString("NATURE_REMO_API_URL", defaultAPIURL)
 	deviceKey := envString("NATURE_REMO_DEVICE_KEY", defaultDeviceKey)
+	label := envString("NATURE_REMO_LABEL", "Nature Remo E")
+	location := strings.TrimSpace(os.Getenv("NATURE_REMO_LOCATION"))
 	interval := envDuration("NATURE_REMO_INTERVAL", time.Minute)
 	runOnceOnly := envBool("NATURE_REMO_RUN_ONCE", false)
 
@@ -74,6 +76,12 @@ func main() {
 		log.Fatalf("connect database: %v", err)
 	}
 	defer db.Close(context.Background())
+	if err := upsertDevice(ctx, db, deviceKey, label, location); err != nil {
+		log.Fatalf("ensure energy device: %v", err)
+	}
+	if err := upsertMetricDefinitions(ctx, db); err != nil {
+		log.Fatalf("ensure metric definitions: %v", err)
+	}
 
 	client := &http.Client{Timeout: 20 * time.Second}
 	log.Printf("nature remo collector started interval=%s device=%s", interval, deviceKey)
@@ -229,6 +237,31 @@ func upsertEnergyReadings(ctx context.Context, db *pgx.Conn, rows []energyReadin
 		}
 	}
 	return nil
+}
+
+func upsertDevice(ctx context.Context, db *pgx.Conn, deviceKey string, label string, location string) error {
+	_, err := db.Exec(ctx, `
+		INSERT INTO energy_devices (source, device_key, label, location)
+		VALUES ($1, $2, $3, $4)
+		ON CONFLICT (source, device_key) DO UPDATE SET
+			label = EXCLUDED.label,
+			location = EXCLUDED.location,
+			updated_at = now()
+	`, sourceName, deviceKey, label, location)
+	return err
+}
+
+func upsertMetricDefinitions(ctx context.Context, db *pgx.Conn) error {
+	_, err := db.Exec(ctx, `
+		INSERT INTO energy_metric_definitions (source, metric, display_name, unit, raw_property)
+		VALUES ($1, $2, $3, $4, $5)
+		ON CONFLICT (source, metric) DO UPDATE SET
+			display_name = EXCLUDED.display_name,
+			unit = EXCLUDED.unit,
+			raw_property = EXCLUDED.raw_property,
+			updated_at = now()
+	`, sourceName, "measured_instantaneous_w", "Measured instantaneous power", "W", "measured_instantaneous")
+	return err
 }
 
 func envString(name string, fallback string) string {

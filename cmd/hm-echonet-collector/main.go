@@ -103,6 +103,8 @@ func main() {
 
 	dsn := envString("BLE_DB_DSN", defaultDBDSN)
 	deviceKey := envString("ECHONET_DEVICE_KEY", defaultDeviceKey)
+	label := envString("ECHONET_LABEL", "ECHONET Lite device")
+	location := strings.TrimSpace(os.Getenv("ECHONET_LOCATION"))
 	localAddr := envString("ECHONET_LOCAL_ADDR", defaultLocalAddr)
 	targetIP := strings.TrimSpace(os.Getenv("ECHONET_TARGET_IP"))
 	multicastAddr := envString("ECHONET_MULTICAST_ADDR", defaultMulticastAddr)
@@ -115,6 +117,12 @@ func main() {
 		log.Fatalf("connect database: %v", err)
 	}
 	defer db.Close(context.Background())
+	if err := upsertDevice(ctx, db, deviceKey, label, location); err != nil {
+		log.Fatalf("ensure energy device: %v", err)
+	}
+	if err := upsertMetricDefinitions(ctx, db); err != nil {
+		log.Fatalf("ensure metric definitions: %v", err)
+	}
 
 	conn, err := listenUDP(localAddr)
 	if err != nil {
@@ -363,6 +371,43 @@ func upsertReadings(ctx context.Context, db *pgx.Conn, readings []energyReading)
 				raw_topic = EXCLUDED.raw_topic,
 				inserted_at = now()
 		`, reading.TS, sourceName, reading.DeviceKey, reading.Instance, reading.Metric, reading.Value, unit, reading.RawProperty)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func upsertDevice(ctx context.Context, db *pgx.Conn, deviceKey string, label string, location string) error {
+	_, err := db.Exec(ctx, `
+		INSERT INTO energy_devices (source, device_key, label, location)
+		VALUES ($1, $2, $3, $4)
+		ON CONFLICT (source, device_key) DO UPDATE SET
+			label = EXCLUDED.label,
+			location = EXCLUDED.location,
+			updated_at = now()
+	`, sourceName, deviceKey, label, location)
+	return err
+}
+
+func upsertMetricDefinitions(ctx context.Context, db *pgx.Conn) error {
+	for _, metric := range metrics {
+		_, err := db.Exec(ctx, `
+			INSERT INTO energy_metric_definitions (
+				source,
+				metric,
+				display_name,
+				unit,
+				raw_property,
+				raw_instance
+			)
+			VALUES ($1, $2, $3, $4, $5, $6)
+			ON CONFLICT (source, metric) DO UPDATE SET
+				unit = EXCLUDED.unit,
+				raw_property = EXCLUDED.raw_property,
+				raw_instance = EXCLUDED.raw_instance,
+				updated_at = now()
+		`, sourceName, metric.Metric, metric.Metric, metric.Unit, metric.RawProperty, formatEOJ(metric.EOJ))
 		if err != nil {
 			return err
 		}

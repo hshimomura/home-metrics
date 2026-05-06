@@ -120,6 +120,33 @@ Edit `/etc/home-metrics/home-metrics.env` for host-specific settings such as `BL
 
 Edit `/etc/home-metrics/sensors.json` for BLE sensor MAC addresses, labels, device type, location, and enabled/disabled state. `db/schema.sql` intentionally does not seed personal sensor or energy device rows; use `examples/seed.example.sql` as a starting point for local metadata.
 
+## Docker Compose
+
+Docker Compose で PostgreSQL / TimescaleDB と Home Metrics の各 daemon をまとめて起動できます。
+
+```bash
+cp examples/home-metrics.compose.env.example .env
+docker compose up -d --build hm-api-server hm-alert-worker hm-db-maint
+```
+
+DB は `timescale/timescaledb:latest-pg17` を使い、初回起動時に `db/schema.sql` と
+`db/energy_optimization.sql` を読み込みます。永続データは `pgdata` volume に保存します。
+
+BLE と ECHONET Lite はホストの BlueZ D-Bus や UDP multicast / port 3610 を使うため、
+Compose では host network の profile service として分けています。
+
+```bash
+docker compose --profile ble --profile echonet up -d --build
+```
+
+BLE collector は `/var/run/dbus` を mount し、`BLE_SENSORS_FILE` として
+`SENSORS_FILE` の JSON を `/etc/home-metrics/sensors.json` に mount します。
+ECHONET Lite は `ECHONET_TARGET_IP` を設定すると multicast discovery を使わず直接対象へ送信します。
+
+host network の collector は Compose の `db` DNS 名を使えないため、DB はホスト側
+`127.0.0.1:${POSTGRES_PORT:-5432}` に publish し、collector 側の `BLE_DB_DSN` は
+`127.0.0.1` 経由にしています。
+
 ## BLE Collector
 
 ```bash
