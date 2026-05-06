@@ -86,6 +86,7 @@ services:
         condition: service_healthy
     environment:
       <<: *app_env
+      BLE_SENSORS_FILE: /etc/home-metrics/sensors.json
       SENSOR_INGEST_SOURCE: ${SENSOR_INGEST_SOURCE:-cisco_spaces}
       CISCO_SPACES_API_KEY: ${CISCO_SPACES_API_KEY:-}
       CISCO_SPACES_FIREHOSE_URL: ${CISCO_SPACES_FIREHOSE_URL:-https://partners.dnaspaces.io/api/partners/v1/firehose/events}
@@ -97,6 +98,10 @@ services:
       CISCO_SPACES_BATTERY_MODE: ${CISCO_SPACES_BATTERY_MODE:-all}
       CISCO_SPACES_BATTERY_ALLOWLIST: ${CISCO_SPACES_BATTERY_ALLOWLIST:-}
       CISCO_SPACES_DRY_RUN: ${CISCO_SPACES_DRY_RUN:-false}
+      CISCO_SPACES_DEBUG: ${CISCO_SPACES_DEBUG:-false}
+      CISCO_SPACES_PRUNE_CONFIGURED_BLE_SENSORS: ${CISCO_SPACES_PRUNE_CONFIGURED_BLE_SENSORS:-true}
+    volumes:
+      - ${SENSORS_FILE:-./examples/sensors.json.example}:/etc/home-metrics/sensors.json:ro
     command: ["hm-cisco-spaces-collector"]
 
   hm-nature-remo-collector:

@@ -24,6 +24,7 @@ import (
 const (
 	defaultDBDSN             = "dbname=ble_sensors host=/var/run/postgresql"
 	defaultFirehoseURL       = "https://partners.dnaspaces.io/api/partners/v1/firehose/events"
+	defaultSensorsFile       = "/etc/home-metrics/sensors.json"
 	defaultSampleWindow      = 5
 	defaultFieldFreshness    = time.Minute
 	defaultUploadInterval    = time.Minute
@@ -43,6 +44,9 @@ type config struct {
 	BatteryMode       string
 	BatteryAllowlist  map[string]bool
 	DryRun            bool
+	Debug             bool
+	PruneBLESensors   bool
+	SensorsFile       string
 }
 
 type firehoseEvent struct {
@@ -128,6 +132,14 @@ type sensorReading struct {
 	ETVOC           *float64
 }
 
+type targetDevice struct {
+	MAC string `json:"mac"`
+}
+
+type targetConfig struct {
+	Devices []targetDevice `json:"devices"`
+}
+
 type recentMetric struct {
 	TS    time.Time
 	Value float64
@@ -161,6 +173,11 @@ func main() {
 			log.Fatalf("connect database: %v", err)
 		}
 		defer db.Close(context.Background())
+		if cfg.PruneBLESensors {
+			if err := pruneConfiguredBLESensors(ctx, db, cfg.SensorsFile); err != nil {
+				log.Printf("prune configured BLE sensors: %v", err)
+			}
+		}
 	}
 
 	p := newProcessor(cfg)
@@ -200,6 +217,9 @@ func loadConfig() config {
 		BatteryMode:       strings.ToLower(envString("CISCO_SPACES_BATTERY_MODE", "all")),
 		BatteryAllowlist:  parseMACSet(os.Getenv("CISCO_SPACES_BATTERY_ALLOWLIST")),
 		DryRun:            envBool("CISCO_SPACES_DRY_RUN", false),
+		Debug:             envBool("CISCO_SPACES_DEBUG", false),
+		PruneBLESensors:   envBool("CISCO_SPACES_PRUNE_CONFIGURED_BLE_SENSORS", true),
+		SensorsFile:       envString("BLE_SENSORS_FILE", defaultSensorsFile),
 	}
 	if cfg.SampleWindow < 1 {
 		cfg.SampleWindow = defaultSampleWindow
@@ -290,30 +310,60 @@ func (p *processor) processEvent(event firehoseEvent) (sensorReading, bool, erro
 		return sensorReading{}, false, nil
 	}
 	if event.RecordTS <= 0 {
+		p.debug("skip Cisco Spaces event reason=missing_record_ts")
 		return sensorReading{}, false, nil
 	}
 	info := event.IOTTelemetry.DeviceInfo
 	mac := normalizeMAC(info.DeviceMACAddress)
 	if mac == "" {
+		p.debug("skip Cisco Spaces event reason=missing_device_mac device_id=%q label=%q", info.DeviceID, info.Label)
 		return sensorReading{}, false, nil
 	}
 	if deviceIDConflictsWithMAC(info) {
+		p.debug("skip Cisco Spaces event reason=device_id_mismatch mac=%s device_id=%q label=%q", mac, info.DeviceID, info.Label)
 		return sensorReading{}, false, nil
 	}
 
 	ts := time.UnixMilli(event.RecordTS).UTC()
-	for _, value := range p.extractValues(mac, event.IOTTelemetry) {
+	values := p.extractValues(mac, event.IOTTelemetry)
+	if len(values) == 0 {
+		p.debug("skip Cisco Spaces event reason=no_metric_values mac=%s device_id=%q label=%q ts=%s", mac, info.DeviceID, info.Label, ts.Format(time.RFC3339))
+	}
+	for _, value := range values {
 		p.addValue(mac, value.Metric, value.Value, ts)
 	}
 	if lastUpload, ok := p.lastUploads[mac]; ok && ts.Sub(lastUpload) < p.cfg.UploadInterval {
+		p.debug("skip Cisco Spaces event reason=upload_interval mac=%s label=%q ts=%s last_upload=%s values=%d", mac, info.Label, ts.Format(time.RFC3339), lastUpload.Format(time.RFC3339), len(values))
 		return sensorReading{}, false, nil
 	}
 	reading := p.buildReading(mac, strings.TrimSpace(info.Label), ts)
 	if reading.empty() {
+		p.debug("skip Cisco Spaces event reason=empty_reading mac=%s label=%q ts=%s values=%d windows=%s", mac, info.Label, ts.Format(time.RFC3339), len(values), p.debugWindows(mac))
 		return sensorReading{}, false, nil
 	}
 	p.lastUploads[mac] = ts
+	p.debug("accept Cisco Spaces event mac=%s label=%q ts=%s values=%d windows=%s", mac, info.Label, ts.Format(time.RFC3339), len(values), p.debugWindows(mac))
 	return reading, true, nil
+}
+
+func (p *processor) debug(format string, args ...any) {
+	if !p.cfg.Debug {
+		return
+	}
+	log.Printf(format, args...)
+}
+
+func (p *processor) debugWindows(mac string) string {
+	windows := p.windows[mac]
+	if len(windows) == 0 {
+		return "{}"
+	}
+	parts := make([]string, 0, len(windows))
+	for name, values := range windows {
+		parts = append(parts, fmt.Sprintf("%s:%d", name, len(values)))
+	}
+	sort.Strings(parts)
+	return "{" + strings.Join(parts, ",") + "}"
 }
 
 func (p *processor) extractValues(mac string, item telemetry) []metricValue {
@@ -436,6 +486,82 @@ func writeReading(ctx context.Context, db *pgx.Conn, reading sensorReading) erro
 		nullablePtr(reading.ETVOC),
 	)
 	return err
+}
+
+func pruneConfiguredBLESensors(ctx context.Context, db *pgx.Conn, path string) error {
+	macs, err := loadConfiguredSensorMACs(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			log.Printf("configured BLE sensors file not found, skip prune path=%s", path)
+			return nil
+		}
+		return err
+	}
+	if len(macs) == 0 {
+		return nil
+	}
+
+	var deleted int64
+	var disabled int64
+	for _, mac := range macs {
+		tag, err := db.Exec(ctx, `
+			DELETE FROM devices d
+			WHERE d.mac = $1
+				AND COALESCE(d.device_type, '') <> 'Cisco Spaces'
+				AND NOT EXISTS (SELECT 1 FROM sensor_minute s WHERE s.mac = d.mac)
+				AND NOT EXISTS (SELECT 1 FROM sensor_1hour s WHERE s.mac = d.mac)
+				AND NOT EXISTS (SELECT 1 FROM sensor_12hour s WHERE s.mac = d.mac)
+				AND NOT EXISTS (SELECT 1 FROM sensor_1day s WHERE s.mac = d.mac)
+				AND NOT EXISTS (SELECT 1 FROM alert_rules r WHERE r.mac = d.mac)
+		`, mac)
+		if err != nil {
+			return fmt.Errorf("delete configured BLE sensor %s: %w", mac, err)
+		}
+		if tag.RowsAffected() > 0 {
+			deleted += tag.RowsAffected()
+			continue
+		}
+
+		tag, err = db.Exec(ctx, `
+			UPDATE devices
+			SET enabled = false,
+				updated_at = now()
+			WHERE mac = $1
+				AND enabled
+				AND COALESCE(device_type, '') <> 'Cisco Spaces'
+		`, mac)
+		if err != nil {
+			return fmt.Errorf("disable configured BLE sensor %s: %w", mac, err)
+		}
+		disabled += tag.RowsAffected()
+	}
+	if deleted > 0 || disabled > 0 {
+		log.Printf("pruned configured BLE sensors deleted=%d disabled=%d source=%s", deleted, disabled, path)
+	}
+	return nil
+}
+
+func loadConfiguredSensorMACs(path string) ([]string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read %s: %w", path, err)
+	}
+	var config targetConfig
+	if err := json.Unmarshal(data, &config); err != nil {
+		return nil, fmt.Errorf("parse %s: %w", path, err)
+	}
+	seen := map[string]bool{}
+	var macs []string
+	for _, device := range config.Devices {
+		mac := normalizeMAC(device.MAC)
+		if mac == "" || seen[mac] {
+			continue
+		}
+		seen[mac] = true
+		macs = append(macs, mac)
+	}
+	sort.Strings(macs)
+	return macs, nil
 }
 
 func upsertDevice(ctx context.Context, db *pgx.Conn, reading sensorReading) error {
