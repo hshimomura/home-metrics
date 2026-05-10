@@ -53,7 +53,8 @@ settings. The deployment model assumes public pull access from `nms4`.
 
 The API contract format is not finalized yet. The target direction is:
 
-- generate or maintain an OpenAPI schema in this repository
+- maintain `docs/openapi.yaml` in this repository
+- lint `docs/openapi.yaml` in CI
 - publish the schema as a release artifact
 - let `RoomPlus` validate or generate client code from that schema
 - keep breaking API changes behind a coordinated server/client release
