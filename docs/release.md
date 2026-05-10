@@ -26,7 +26,11 @@ Tags:
 - `sha-<short-sha>`: traceable development image
 - `vX.Y.Z`: release image
 
-Deployment should use the digest emitted by the Container workflow.
+During active development, `servicecore` deploys the digest resolved from the `main` tag.
+After the service settles, production deploys should move to digests resolved from `vX.Y.Z`
+release tags.
+
+Deployment should always use a digest, not the moving tag itself.
 
 Example:
 
@@ -39,13 +43,28 @@ settings. The deployment model assumes public pull access from `nms4`.
 
 ## Release Flow
 
+Active development flow:
+
+1. Merge server-side changes to `main`.
+2. Confirm CI passes.
+3. Confirm the Container workflow publishes `ghcr.io/hshimomura/home-metrics:main`.
+4. Confirm whether the change needs a DB migration.
+5. If migration is required, make it explicit in the PR or release note and confirm it
+   manually before the `servicecore` deploy.
+6. Update `ioslab-docs/servicecore` to use the digest resolved from `main`.
+7. Let `servicecore-docker-check` and `servicecore-docker-nms4-deploy` apply the change.
+
+Stable release flow:
+
 1. Merge server-side changes to `main`.
 2. Confirm CI passes.
 3. Create a release tag such as `v1.2.3`.
 4. Confirm the Container workflow publishes `ghcr.io/hshimomura/home-metrics:v1.2.3`.
-5. Copy the published image digest.
-6. Update `ioslab-docs/servicecore` to use that digest.
-7. Let `servicecore-docker-check` and `servicecore-docker-nms4-deploy` apply the change.
+5. Confirm whether the change needs a DB migration.
+6. If migration is required, make it explicit in the release note and confirm it manually
+   before the `servicecore` deploy.
+7. Update `ioslab-docs/servicecore` to use the digest resolved from the release tag.
+8. Let `servicecore-docker-check` and `servicecore-docker-nms4-deploy` apply the change.
 
 ## API Contract
 
@@ -56,5 +75,8 @@ The API contract format is not finalized yet. The target direction is:
 - maintain `docs/openapi.yaml` in this repository
 - lint `docs/openapi.yaml` in CI
 - publish the schema as a release artifact
-- let `RoomPlus` validate or generate client code from that schema
+- let `RoomPlus` validate its handwritten API client against that schema
 - keep breaking API changes behind a coordinated server/client release
+
+Generated Swift client code is not used for now. Revisit generation after the API surface
+grows enough that the handwritten client becomes costly to maintain.
