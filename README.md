@@ -37,6 +37,13 @@ build/
 dist/
 ```
 
+## Release / Deployment
+
+GitHub を canonical repository とし、Docker image は public GHCR image として publish します。
+本番 deploy は `ioslab-docs/servicecore` 側で image digest を pin して行います。
+
+詳細は [docs/release.md](docs/release.md) を参照してください。
+
 ## Database
 
 DB 名は `ble_sensors` を想定しています。
