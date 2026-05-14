@@ -168,6 +168,30 @@ func TestLoadConfiguredSensorMACs(t *testing.T) {
 	}
 }
 
+func TestValidDeviceLabelRejectsBlankAndMACLabels(t *testing.T) {
+	mac := "aa:bb:cc:dd:ee:ff"
+	cases := []struct {
+		name  string
+		label string
+		want  bool
+	}{
+		{name: "blank", label: " ", want: false},
+		{name: "same mac", label: "aa:bb:cc:dd:ee:ff", want: false},
+		{name: "same mac uppercase", label: "AA:BB:CC:DD:EE:FF", want: false},
+		{name: "same mac hyphenated", label: "aa-bb-cc-dd-ee-ff", want: false},
+		{name: "human label", label: "Desk", want: true},
+		{name: "contains mac but not exact", label: "Desk aa:bb:cc:dd:ee:ff", want: true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := validDeviceLabel(mac, tc.label); got != tc.want {
+				t.Fatalf("validDeviceLabel(%q, %q) = %t, want %t", mac, tc.label, got, tc.want)
+			}
+		})
+	}
+}
+
 func testEvent(recordTS int64, mac string) firehoseEvent {
 	return firehoseEvent{
 		EventType: "IOT_TELEMETRY",
