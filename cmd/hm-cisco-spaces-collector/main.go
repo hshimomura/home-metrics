@@ -566,19 +566,28 @@ func loadConfiguredSensorMACs(path string) ([]string, error) {
 
 func upsertDevice(ctx context.Context, db *pgx.Conn, reading sensorReading) error {
 	label := strings.TrimSpace(reading.Label)
-	if label == "" {
+	hasLabel := validDeviceLabel(reading.MAC, label)
+	if !hasLabel {
 		label = reading.MAC
 	}
 	_, err := db.Exec(ctx, `
 		INSERT INTO devices (mac, label, device_type, location)
 		VALUES ($1, $2, $3, $4)
 		ON CONFLICT (mac) DO UPDATE SET
-			label = EXCLUDED.label,
+			label = CASE WHEN $5 THEN EXCLUDED.label ELSE devices.label END,
 			device_type = COALESCE(devices.device_type, EXCLUDED.device_type),
 			location = COALESCE(devices.location, EXCLUDED.location),
 			updated_at = now()
-	`, reading.MAC, label, "Cisco Spaces", label)
+	`, reading.MAC, label, "Cisco Spaces", nullableString(label, hasLabel), hasLabel)
 	return err
+}
+
+func validDeviceLabel(mac string, label string) bool {
+	label = strings.TrimSpace(label)
+	if label == "" {
+		return false
+	}
+	return normalizeMAC(label) != mac
 }
 
 func (r sensorReading) empty() bool {
@@ -630,6 +639,13 @@ func nullablePtr(value *float64) any {
 		return nil
 	}
 	return *value
+}
+
+func nullableString(value string, valid bool) any {
+	if !valid {
+		return nil
+	}
+	return value
 }
 
 func median(values []float64) float64 {
