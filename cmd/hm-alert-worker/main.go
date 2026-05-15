@@ -78,9 +78,25 @@ func main() {
 	if err != nil {
 		log.Fatalf("configure notifier: %v", err)
 	}
+	healthCfg := newHealthConfigFromEnv()
+	var healthAlertNotifier healthNotifier = dryRunHealthNotifier{}
+	if healthCfg.Enabled {
+		healthDryRun := envBool("HEALTH_WEBHOOK_DRY_RUN", true)
+		healthAlertNotifier, err = newHealthNotifierFromEnv(healthDryRun, http.DefaultClient)
+		if err != nil {
+			log.Fatalf("configure health notifier: %v", err)
+		}
+	}
 
-	log.Printf("alert worker started interval=%s db=%s mode=%s", interval, dsn, alertNotifier.Mode())
-	if err := runOnce(ctx, db, alertNotifier); err != nil {
+	log.Printf(
+		"alert worker started interval=%s db=%s mode=%s health_enabled=%t health_mode=%s",
+		interval,
+		redactDSN(dsn),
+		alertNotifier.Mode(),
+		healthCfg.Enabled,
+		healthAlertNotifier.Mode(),
+	)
+	if err := runOnce(ctx, db, alertNotifier, healthAlertNotifier, healthCfg); err != nil {
 		log.Printf("alert check: %v", err)
 	}
 	if runOnceOnly {
@@ -94,7 +110,7 @@ func main() {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			if err := runOnce(ctx, db, alertNotifier); err != nil {
+			if err := runOnce(ctx, db, alertNotifier, healthAlertNotifier, healthCfg); err != nil {
 				log.Printf("alert check: %v", err)
 			}
 		}
@@ -130,7 +146,7 @@ func envDuration(name string, fallback time.Duration) time.Duration {
 	return parsed
 }
 
-func runOnce(ctx context.Context, db *pgx.Conn, alertNotifier notifier) error {
+func runOnce(ctx context.Context, db *pgx.Conn, alertNotifier notifier, healthAlertNotifier healthNotifier, healthCfg healthConfig) error {
 	rules, err := loadRules(ctx, db)
 	if err != nil {
 		return err
@@ -140,7 +156,17 @@ func runOnce(ctx context.Context, db *pgx.Conn, alertNotifier notifier) error {
 			log.Printf("rule=%d mac=%s metric=%s: %v", rule.ID, rule.MAC, rule.Metric, err)
 		}
 	}
+	if err := runHealthOnce(ctx, db, healthAlertNotifier, healthCfg, time.Now()); err != nil {
+		return fmt.Errorf("health check: %w", err)
+	}
 	return nil
+}
+
+func redactDSN(dsn string) string {
+	if strings.TrimSpace(dsn) == "" {
+		return ""
+	}
+	return "configured"
 }
 
 func loadRules(ctx context.Context, db *pgx.Conn) ([]alertRule, error) {

@@ -14,6 +14,8 @@ import (
 	"syscall"
 	"time"
 
+	"home-metrics/internal/adminwebhook"
+
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -32,6 +34,7 @@ type apiServer struct {
 	apiToken       string
 	allowedOrigins map[string]bool
 	apns           *apnsTestSender
+	adminWebhook   *adminwebhook.Client
 }
 
 type deviceResponse struct {
@@ -204,16 +207,22 @@ func main() {
 	if dsn == "" {
 		dsn = defaultDBDSN
 	}
-	log.Printf("dsn: %s", dsn)
 	addr := os.Getenv("API_ADDR")
 	if addr == "" {
 		addr = defaultAddr
 	}
 	apiToken := strings.TrimSpace(os.Getenv("API_TOKEN"))
+	if envBool("API_REQUIRE_TOKEN", false) && apiToken == "" {
+		log.Fatal("API_TOKEN is required when API_REQUIRE_TOKEN=true")
+	}
 	allowedOrigins := parseAllowedOrigins(os.Getenv("API_ALLOWED_ORIGINS"))
 	apnsSender, err := newAPNSTestSenderFromEnv(http.DefaultClient)
 	if err != nil {
 		log.Printf("configure APNs test sender: %v", err)
+	}
+	adminWebhook, err := adminwebhook.New(os.Getenv("WEBHOOK_RELAY_URL"), os.Getenv("WEBHOOK_RELAY_TOKEN"), envDuration("WEBHOOK_RELAY_TIMEOUT", 10*time.Second), http.DefaultClient)
+	if err != nil {
+		log.Fatalf("configure admin webhook: %v", err)
 	}
 
 	db, err := pgxpool.New(ctx, dsn)
@@ -224,7 +233,7 @@ func main() {
 
 	server := &http.Server{
 		Addr:              addr,
-		Handler:           newRouter(&apiServer{db: db, apiToken: apiToken, allowedOrigins: allowedOrigins, apns: apnsSender}),
+		Handler:           newRouter(&apiServer{db: db, apiToken: apiToken, allowedOrigins: allowedOrigins, apns: apnsSender, adminWebhook: adminWebhook}),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
@@ -237,7 +246,7 @@ func main() {
 		}
 	}()
 
-	log.Printf("api server started addr=%s db=%s", addr, dsn)
+	log.Printf("api server started addr=%s db=%s", addr, redactDSN(dsn))
 	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Fatalf("listen api server: %v", err)
 	}
@@ -247,6 +256,11 @@ func newRouter(api *apiServer) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /", api.handleWebIndex)
 	mux.HandleFunc("GET /api/health", api.handleHealth)
+	mux.HandleFunc("GET /api/health/details", api.handleHealthDetails)
+	mux.HandleFunc("GET /api/admin/collector-status", api.handleCollectorStatus)
+	mux.HandleFunc("GET /api/admin/health-alerts", api.handleHealthAlerts)
+	mux.HandleFunc("GET /api/admin/health-notification-events", api.handleHealthNotificationEvents)
+	mux.HandleFunc("POST /api/admin/health-alerts/{alert_key}/test-webhook", api.handleTestHealthWebhook)
 	mux.HandleFunc("GET /api/devices", api.handleDevices)
 	mux.HandleFunc("GET /api/devices/{mac}/latest", api.handleDeviceLatest)
 	mux.HandleFunc("GET /api/devices/{mac}/series", api.handleDeviceSeries)
@@ -1409,6 +1423,42 @@ func parseAllowedOrigins(raw string) map[string]bool {
 		}
 	}
 	return origins
+}
+
+func envBool(name string, fallback bool) bool {
+	value := strings.ToLower(strings.TrimSpace(os.Getenv(name)))
+	if value == "" {
+		return fallback
+	}
+	switch value {
+	case "1", "true", "yes", "on":
+		return true
+	case "0", "false", "no", "off":
+		return false
+	default:
+		log.Printf("invalid %s=%q, using %t", name, value, fallback)
+		return fallback
+	}
+}
+
+func envDuration(name string, fallback time.Duration) time.Duration {
+	value := os.Getenv(name)
+	if value == "" {
+		return fallback
+	}
+	parsed, err := time.ParseDuration(value)
+	if err != nil {
+		log.Printf("invalid %s=%q, using %s", name, value, fallback)
+		return fallback
+	}
+	return parsed
+}
+
+func redactDSN(dsn string) string {
+	if strings.TrimSpace(dsn) == "" {
+		return ""
+	}
+	return "configured"
 }
 
 func parseID(w http.ResponseWriter, raw string) (int64, bool) {

@@ -283,6 +283,39 @@ ALERT_WORKER_RUN_ONCE=true \
 hm-alert-worker
 ```
 
+collector / sensor / energy の収集状態を DB に記録し、管理者向け webhook へ送る
+health evaluator は別スイッチで有効化します。Apple Push 通知とは独立しており、
+health 通知は `health_alert_state` と `health_notification_events` に保存します。
+
+```bash
+BLE_DB_DSN='dbname=ble_sensors host=/var/run/postgresql' \
+HEALTH_EVALUATOR_ENABLED=true \
+HEALTH_WEBHOOK_DRY_RUN=false \
+WEBHOOK_RELAY_URL='http://webhook-relay-web:8097/webhooks/home-metrics' \
+WEBHOOK_RELAY_TOKEN='...' \
+hm-alert-worker
+```
+
+主な設定:
+
+```text
+HEALTH_EVALUATOR_ENABLED
+HEALTH_WEBHOOK_DRY_RUN
+HEALTH_COLLECTOR_STALE_AFTER
+HEALTH_DATA_STALE_AFTER
+HEALTH_SENSOR_STALE_AFTER
+HEALTH_ENERGY_STALE_AFTER
+HEALTH_NOTIFICATION_COOLDOWN
+HOME_METRICS_BASE_URL
+WEBHOOK_RELAY_URL
+WEBHOOK_RELAY_TOKEN
+WEBHOOK_RELAY_TIMEOUT
+```
+
+`HEALTH_WEBHOOK_DRY_RUN=true` の場合、webhook へは送らず
+`health_notification_events.status = 'dry_run'` を記録します。
+`WEBHOOK_RELAY_URL` は API response には出さず、配送結果だけを保存します。
+
 APNs へ実送信する場合:
 
 ```bash
@@ -316,12 +349,13 @@ VALUES (1, 'aa:bb:cc:dd:ee:02', 'temperature_c', '>', 35, interval '24 hours');
 
 ## API Server
 
-iOS app や別アプリから DB を読むための最小 REST API です。初期実装は single user `id=1` 前提です。`API_TOKEN` を設定すると `/` と `/api/health` 以外に bearer token 認証を要求します。
+iOS app や別アプリから DB を読むための最小 REST API です。初期実装は single user `id=1` 前提です。`API_TOKEN` を設定すると `/` と `/api/health` 以外に bearer token 認証を要求します。production では `API_REQUIRE_TOKEN=true` を設定すると、`API_TOKEN` が空のまま起動することを防げます。
 
 ```bash
 BLE_DB_DSN='dbname=ble_sensors host=/var/run/postgresql' \
 API_ADDR=':8080' \
 API_TOKEN='change-me' \
+API_REQUIRE_TOKEN=true \
 API_ALLOWED_ORIGINS='http://localhost:8080' \
 hm-api-server
 ```
@@ -334,6 +368,11 @@ systemd では `/etc/home-metrics/home-metrics.env` に `API_TOKEN=...` と必�
 
 ```text
 GET    /api/health
+GET    /api/health/details
+GET    /api/admin/collector-status
+GET    /api/admin/health-alerts
+GET    /api/admin/health-notification-events
+POST   /api/admin/health-alerts/{alert_key}/test-webhook
 GET    /api/devices
 GET    /api/devices/{mac}/latest
 GET    /api/devices/{mac}/series?metric=temperature_c&range=1d

@@ -17,6 +17,8 @@ https://metrics.example.com
 
 `API_TOKEN` が backend に設定されている場合、`/` と `/api/health` 以外の
 API には token が必要です。未設定の場合は認証なしです。
+production では `API_REQUIRE_TOKEN=true` を設定すると、`API_TOKEN` が空の場合に
+API server が起動失敗します。
 
 推奨 header:
 
@@ -140,6 +142,45 @@ Response `200`:
 ```
 
 DB に接続できない場合は `503`。
+
+### GET /api/health/details
+
+DB 接続、collector status、health alert、webhook delivery の概要です。
+`WEBHOOK_RELAY_URL` そのものは返さず、設定済みかどうかだけを返します。
+`stale_collectors` は固定時間で再判定せず、health evaluator が
+`health_alert_state` に記録した active collector alert 数を返します。
+
+Response `200`:
+
+```json
+{
+  "status": "ok",
+  "database": "ok",
+  "collector_targets": 5,
+  "stale_collectors": 0,
+  "active_health_alerts": 0,
+  "failed_deliveries_24h": 0,
+  "webhook_configured": true
+}
+```
+
+### GET /api/admin/collector-status
+
+collector が自己申告した成功・失敗・データ保存時刻を返します。
+
+### GET /api/admin/health-alerts
+
+`health_alert_state` の現在状態を返します。`?status=firing` または
+`?status=resolved` で絞り込めます。
+
+### GET /api/admin/health-notification-events
+
+health alert の webhook 配送履歴を返します。
+
+### POST /api/admin/health-alerts/{alert_key}/test-webhook
+
+指定した health alert を元に admin webhook の test payload を送信します。
+Apple Push Notification には送信しません。
 
 ### GET /api/devices
 
