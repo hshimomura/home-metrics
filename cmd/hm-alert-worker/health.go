@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -35,13 +36,16 @@ type healthConfig struct {
 }
 
 type healthAlert struct {
-	Key      string
-	Status   string
-	Severity string
-	Title    string
-	Source   string
-	Summary  string
-	Labels   map[string]string
+	Key              string
+	Status           string
+	Severity         string
+	Title            string
+	Source           string
+	Summary          string
+	Labels           map[string]string
+	Impact           map[string]any
+	Timestamps       map[string]string
+	SuggestedActions []string
 }
 
 type healthState struct {
@@ -87,14 +91,19 @@ func (n webhookHealthNotifier) Notify(ctx context.Context, alert healthAlert, ev
 		return healthNotificationResult{Status: "skipped", ErrorMessage: &msg}
 	}
 	payload := adminwebhook.Payload{
-		EventID:  eventID,
-		Status:   alert.Status,
-		Severity: alert.Severity,
-		Title:    alert.Title,
-		Source:   alert.Source,
-		Summary:  alert.Summary,
-		Labels:   alert.Labels,
-		URL:      healthAlertURL(baseURL, alert.Key),
+		EventID:          eventID,
+		EventType:        "health_alert",
+		Status:           alert.Status,
+		Severity:         alert.Severity,
+		AlertKey:         alert.Key,
+		Title:            alert.Title,
+		Source:           alert.Source,
+		Summary:          alert.Summary,
+		Labels:           alert.Labels,
+		Impact:           alert.Impact,
+		Timestamps:       alert.Timestamps,
+		SuggestedActions: alert.SuggestedActions,
+		URL:              healthAlertURL(baseURL, alert.Key),
 	}
 	result, err := n.client.Send(ctx, payload)
 	httpStatus := result.StatusCode
@@ -188,8 +197,10 @@ func evaluateCollectorHealth(ctx context.Context, db *pgx.Conn, cfg healthConfig
 			collector_name,
 			target_type,
 			target_key,
+			last_attempt_at,
 			last_success_at,
 			last_data_at,
+			last_failure_at,
 			COALESCE(last_error, ''),
 			consecutive_failures,
 			updated_at
@@ -204,15 +215,17 @@ func evaluateCollectorHealth(ctx context.Context, db *pgx.Conn, cfg healthConfig
 	var alerts []healthAlert
 	for rows.Next() {
 		var collectorName, targetType, targetKey, lastError string
-		var lastSuccessAt, lastDataAt pgtype.Timestamptz
+		var lastAttemptAt, lastSuccessAt, lastDataAt, lastFailureAt pgtype.Timestamptz
 		var consecutiveFailures int
 		var updatedAt time.Time
 		if err := rows.Scan(
 			&collectorName,
 			&targetType,
 			&targetKey,
+			&lastAttemptAt,
 			&lastSuccessAt,
 			&lastDataAt,
+			&lastFailureAt,
 			&lastError,
 			&consecutiveFailures,
 			&updatedAt,
@@ -226,16 +239,22 @@ func evaluateCollectorHealth(ctx context.Context, db *pgx.Conn, cfg healthConfig
 			"target_type":    targetType,
 			"target_key":     targetKey,
 		}
-		source := collectorName + "/" + targetKey
+		source := enrichedCollectorSource(collectorName, targetType, targetKey)
+		timestamps := collectorTimestamps(lastAttemptAt, lastSuccessAt, lastDataAt, lastFailureAt, updatedAt)
+		impact := collectorImpact(targetType, targetKey)
+		actions := suggestedCollectorActions(targetType)
 		if now.Sub(updatedAt) > cfg.CollectorStaleAfter {
 			alerts = append(alerts, healthAlert{
-				Key:      key,
-				Status:   healthStatusFiring,
-				Severity: "critical",
-				Title:    "Collector heartbeat stale",
-				Source:   source,
-				Summary:  fmt.Sprintf("%s has not updated collector_status for %s.", source, roundDuration(now.Sub(updatedAt))),
-				Labels:   labels,
+				Key:              key,
+				Status:           healthStatusFiring,
+				Severity:         "critical",
+				Title:            "Collector heartbeat stale",
+				Source:           source,
+				Summary:          fmt.Sprintf("%s has not updated collector_status for %s.", source, roundDuration(now.Sub(updatedAt))),
+				Labels:           labels,
+				Impact:           impact,
+				Timestamps:       timestamps,
+				SuggestedActions: actions,
 			})
 			continue
 		}
@@ -245,48 +264,60 @@ func evaluateCollectorHealth(ctx context.Context, db *pgx.Conn, cfg healthConfig
 				summary += " Last error: " + trimForSummary(lastError)
 			}
 			alerts = append(alerts, healthAlert{
-				Key:      key,
-				Status:   healthStatusFiring,
-				Severity: "warning",
-				Title:    "Collector failures detected",
-				Source:   source,
-				Summary:  summary,
-				Labels:   labels,
+				Key:              key,
+				Status:           healthStatusFiring,
+				Severity:         "warning",
+				Title:            "Collector failures detected",
+				Source:           source,
+				Summary:          summary,
+				Labels:           labels,
+				Impact:           impact,
+				Timestamps:       timestamps,
+				SuggestedActions: actions,
 			})
 			continue
 		}
 		if lastDataAt.Valid && now.Sub(lastDataAt.Time) > cfg.DataStaleAfter {
 			alerts = append(alerts, healthAlert{
-				Key:      key,
-				Status:   healthStatusFiring,
-				Severity: "warning",
-				Title:    "Collector data stale",
-				Source:   source,
-				Summary:  fmt.Sprintf("%s is alive, but no data has been recorded for %s.", source, roundDuration(now.Sub(lastDataAt.Time))),
-				Labels:   labels,
+				Key:              key,
+				Status:           healthStatusFiring,
+				Severity:         "warning",
+				Title:            "Collector data stale",
+				Source:           source,
+				Summary:          fmt.Sprintf("%s is alive, but no data has been recorded for %s.", source, roundDuration(now.Sub(lastDataAt.Time))),
+				Labels:           labels,
+				Impact:           impact,
+				Timestamps:       timestamps,
+				SuggestedActions: actions,
 			})
 			continue
 		}
 		if !lastDataAt.Valid && lastSuccessAt.Valid && now.Sub(lastSuccessAt.Time) > cfg.DataStaleAfter {
 			alerts = append(alerts, healthAlert{
-				Key:      key,
-				Status:   healthStatusFiring,
-				Severity: "warning",
-				Title:    "Collector has no data",
-				Source:   source,
-				Summary:  fmt.Sprintf("%s has not recorded data since it began reporting success.", source),
-				Labels:   labels,
+				Key:              key,
+				Status:           healthStatusFiring,
+				Severity:         "warning",
+				Title:            "Collector has no data",
+				Source:           source,
+				Summary:          fmt.Sprintf("%s has not recorded data since it began reporting success.", source),
+				Labels:           labels,
+				Impact:           impact,
+				Timestamps:       timestamps,
+				SuggestedActions: actions,
 			})
 			continue
 		}
 		alerts = append(alerts, healthAlert{
-			Key:      key,
-			Status:   healthStatusResolved,
-			Severity: "info",
-			Title:    "Collector recovered",
-			Source:   source,
-			Summary:  fmt.Sprintf("%s is reporting normally.", source),
-			Labels:   labels,
+			Key:              key,
+			Status:           healthStatusResolved,
+			Severity:         "info",
+			Title:            "Collector recovered",
+			Source:           source,
+			Summary:          fmt.Sprintf("%s is reporting normally.", source),
+			Labels:           labels,
+			Impact:           impact,
+			Timestamps:       timestamps,
+			SuggestedActions: actions,
 		})
 	}
 	return alerts, rows.Err()
@@ -315,27 +346,37 @@ func evaluateSensorFreshness(ctx context.Context, db *pgx.Conn, cfg healthConfig
 		}
 		key := healthKey("metric", "sensor_minute", mac, "data")
 		labels := map[string]string{"kind": "sensor", "mac": mac, "label": label}
+		impact := map[string]any{
+			"table":            "sensor_minute",
+			"metrics":          []string{"temperature_c", "humidity_percent", "battery_percent", "rssi_dbm", "pressure_hpa", "co2_ppm", "lux", "etvoc"},
+			"freshness_window": cfg.SensorStaleAfter.String(),
+		}
 		if !latest.Valid {
 			alerts = append(alerts, healthAlert{
-				Key:      key,
-				Status:   healthStatusFiring,
-				Severity: "warning",
-				Title:    "Sensor data missing",
-				Source:   mac,
-				Summary:  fmt.Sprintf("%s has no sensor_minute data.", labelOrKey(label, mac)),
-				Labels:   labels,
+				Key:              key,
+				Status:           healthStatusFiring,
+				Severity:         "warning",
+				Title:            "Sensor data missing",
+				Source:           labelOrKey(label, mac),
+				Summary:          fmt.Sprintf("%s has no sensor_minute data.", labelOrKey(label, mac)),
+				Labels:           labels,
+				Impact:           impact,
+				SuggestedActions: []string{"Check whether the sensor is powered and nearby.", "Check collector status for BLE or Cisco Spaces ingestion.", "Open /admin and inspect this sensor freshness alert."},
 			})
 			continue
 		}
 		if now.Sub(latest.Time) > cfg.SensorStaleAfter {
 			alerts = append(alerts, healthAlert{
-				Key:      key,
-				Status:   healthStatusFiring,
-				Severity: "warning",
-				Title:    "Sensor data stale",
-				Source:   mac,
-				Summary:  fmt.Sprintf("%s sensor data is stale for %s.", labelOrKey(label, mac), roundDuration(now.Sub(latest.Time))),
-				Labels:   labels,
+				Key:              key,
+				Status:           healthStatusFiring,
+				Severity:         "warning",
+				Title:            "Sensor data stale",
+				Source:           labelOrKey(label, mac),
+				Summary:          fmt.Sprintf("%s sensor data is stale for %s.", labelOrKey(label, mac), roundDuration(now.Sub(latest.Time))),
+				Labels:           labels,
+				Impact:           impact,
+				Timestamps:       map[string]string{"last_data_at": latest.Time.Format(time.RFC3339)},
+				SuggestedActions: []string{"Check whether the sensor is powered and nearby.", "Check collector status for BLE or Cisco Spaces ingestion.", "Open /admin and inspect this sensor freshness alert."},
 			})
 			continue
 		}
@@ -385,28 +426,39 @@ func evaluateEnergyFreshness(ctx context.Context, db *pgx.Conn, cfg healthConfig
 			"metric":     metric,
 			"label":      label,
 		}
-		alertSource := source + "/" + deviceKey
+		alertSource := source + "/" + labelOrKey(label, deviceKey)
+		impact := map[string]any{
+			"source":           source,
+			"device_key":       deviceKey,
+			"metrics":          []string{metric},
+			"freshness_window": cfg.EnergyStaleAfter.String(),
+		}
 		if !latest.Valid {
 			alerts = append(alerts, healthAlert{
-				Key:      key,
-				Status:   healthStatusFiring,
-				Severity: "warning",
-				Title:    "Energy data missing",
-				Source:   alertSource,
-				Summary:  fmt.Sprintf("%s has no %s readings.", labelOrKey(label, deviceKey), metric),
-				Labels:   labels,
+				Key:              key,
+				Status:           healthStatusFiring,
+				Severity:         "warning",
+				Title:            "Energy data missing",
+				Source:           alertSource,
+				Summary:          fmt.Sprintf("%s has no %s readings.", labelOrKey(label, deviceKey), metric),
+				Labels:           labels,
+				Impact:           impact,
+				SuggestedActions: suggestedEnergyActions(source),
 			})
 			continue
 		}
 		if now.Sub(latest.Time) > cfg.EnergyStaleAfter {
 			alerts = append(alerts, healthAlert{
-				Key:      key,
-				Status:   healthStatusFiring,
-				Severity: "warning",
-				Title:    "Energy data stale",
-				Source:   alertSource,
-				Summary:  fmt.Sprintf("%s %s readings are stale for %s.", labelOrKey(label, deviceKey), metric, roundDuration(now.Sub(latest.Time))),
-				Labels:   labels,
+				Key:              key,
+				Status:           healthStatusFiring,
+				Severity:         "warning",
+				Title:            "Energy data stale",
+				Source:           alertSource,
+				Summary:          fmt.Sprintf("%s %s readings are stale for %s.", labelOrKey(label, deviceKey), metric, roundDuration(now.Sub(latest.Time))),
+				Labels:           labels,
+				Impact:           impact,
+				Timestamps:       map[string]string{"last_data_at": latest.Time.Format(time.RFC3339)},
+				SuggestedActions: suggestedEnergyActions(source),
 			})
 			continue
 		}
@@ -620,7 +672,83 @@ func healthAlertURL(baseURL string, key string) string {
 	if baseURL == "" {
 		return ""
 	}
-	return baseURL + "/admin/health-alerts/" + key
+	return baseURL + "/admin#alert=" + url.QueryEscape(key)
+}
+
+func enrichedCollectorSource(collectorName string, targetType string, targetKey string) string {
+	switch targetType {
+	case "cisco_spaces_firehose":
+		return collectorName + "/firehose"
+	default:
+		return collectorName + "/" + targetKey
+	}
+}
+
+func collectorTimestamps(lastAttemptAt, lastSuccessAt, lastDataAt, lastFailureAt pgtype.Timestamptz, updatedAt time.Time) map[string]string {
+	values := map[string]string{
+		"updated_at": updatedAt.Format(time.RFC3339),
+	}
+	addPgTimestamp(values, "last_attempt_at", lastAttemptAt)
+	addPgTimestamp(values, "last_success_at", lastSuccessAt)
+	addPgTimestamp(values, "last_data_at", lastDataAt)
+	addPgTimestamp(values, "last_failure_at", lastFailureAt)
+	return values
+}
+
+func addPgTimestamp(values map[string]string, key string, value pgtype.Timestamptz) {
+	if value.Valid {
+		values[key] = value.Time.Format(time.RFC3339)
+	}
+}
+
+func collectorImpact(targetType string, targetKey string) map[string]any {
+	impact := map[string]any{
+		"target_type": targetType,
+		"target_key":  targetKey,
+	}
+	switch targetType {
+	case "apcupsd_server":
+		impact["source"] = "apcupsd"
+		impact["metrics"] = []string{"input_voltage_v", "load_percent", "battery_charge_percent", "battery_voltage_v"}
+	case "echonet_device":
+		impact["source"] = "echonet"
+		impact["metrics"] = []string{"solar_generation_w", "battery_remaining", "battery_power_w"}
+	case "nature_remo_device":
+		impact["source"] = "nature_remo"
+		impact["metrics"] = []string{"measured_instantaneous_w"}
+	case "cisco_spaces_firehose":
+		impact["source"] = "sensor_minute"
+		impact["metrics"] = []string{"temperature_c", "humidity_percent", "battery_percent", "rssi_dbm", "pressure_hpa", "co2_ppm", "lux", "etvoc"}
+	}
+	return impact
+}
+
+func suggestedCollectorActions(targetType string) []string {
+	switch targetType {
+	case "apcupsd_server":
+		return []string{"Check apcupsd service reachability from nms4.", "Check the UPS USB/network connection.", "Open /admin and inspect apcupsd collector_status."}
+	case "echonet_device":
+		return []string{"Check the ECHONET target power and network reachability.", "Check whether the target still responds to its configured EOJ/EPC.", "Open /admin and inspect this ECHONET collector_status row."}
+	case "nature_remo_device":
+		return []string{"Check Nature Remo API reachability and token validity.", "Check whether the smart meter integration is reporting values.", "Open /admin and inspect nature_remo collector_status."}
+	case "cisco_spaces_firehose":
+		return []string{"Check for duplicate Cisco Spaces Firehose collectors before starting diagnostics.", "Check collector_status.updated_at and last_data_at in /admin.", "Restart only the production hm-cisco-spaces-collector if the stream is stuck."}
+	default:
+		return []string{"Open /admin and inspect collector_status.", "Check the collector logs for the target.", "Restart the collector only after checking whether the target is reachable."}
+	}
+}
+
+func suggestedEnergyActions(source string) []string {
+	switch source {
+	case "apcupsd":
+		return []string{"Check apcupsd service reachability from nms4.", "Check UPS power and communication state.", "Open /admin and inspect related health alerts."}
+	case "echonet":
+		return []string{"Check the ECHONET device power and network reachability.", "Check whether the target responds to ECHONET Lite requests.", "Open /admin and inspect related collector_status."}
+	case "nature_remo":
+		return []string{"Check Nature Remo API reachability and token validity.", "Check smart meter integration status.", "Open /admin and inspect related collector_status."}
+	default:
+		return []string{"Open /admin and inspect related collector_status.", "Check the upstream device or API.", "Check recent health notification delivery results."}
+	}
 }
 
 func nullableString(value string) *string {

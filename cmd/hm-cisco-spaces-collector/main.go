@@ -34,6 +34,7 @@ const (
 	defaultReconnectMinDelay = time.Second
 	defaultReconnectMaxDelay = time.Minute
 	defaultStreamHeartbeat   = time.Minute
+	ciscoSpacesLockKey       = int64(734829148912345)
 )
 
 type config struct {
@@ -49,6 +50,7 @@ type config struct {
 	BatteryMode       string
 	BatteryAllowlist  map[string]bool
 	DryRun            bool
+	AllowSecondary    bool
 	Debug             bool
 	PruneBLESensors   bool
 	SensorsFile       string
@@ -210,13 +212,32 @@ func main() {
 	}
 
 	var db *pgx.Conn
-	if !cfg.DryRun {
+	var lockDB *pgx.Conn
+	if !cfg.DryRun || !cfg.AllowSecondary {
 		var err error
 		db, err = pgx.Connect(ctx, cfg.DBDSN)
 		if err != nil {
 			log.Fatalf("connect database: %v", err)
 		}
 		defer db.Close(context.Background())
+		lockDB = db
+	}
+	if !cfg.AllowSecondary {
+		if lockDB == nil {
+			var err error
+			lockDB, err = pgx.Connect(ctx, cfg.DBDSN)
+			if err != nil {
+				log.Fatalf("connect database for Cisco Spaces lock: %v", err)
+			}
+			defer lockDB.Close(context.Background())
+		}
+		release, err := acquireCiscoSpacesLock(ctx, lockDB)
+		if err != nil {
+			log.Fatalf("acquire Cisco Spaces collector lock: %v", err)
+		}
+		defer release()
+	}
+	if !cfg.DryRun {
 		if cfg.PruneBLESensors {
 			if err := pruneConfiguredBLESensors(ctx, db, cfg.SensorsFile); err != nil {
 				log.Printf("prune configured BLE sensors: %v", err)
@@ -278,6 +299,7 @@ func loadConfig() config {
 		BatteryMode:       strings.ToLower(envString("CISCO_SPACES_BATTERY_MODE", "all")),
 		BatteryAllowlist:  parseMACSet(os.Getenv("CISCO_SPACES_BATTERY_ALLOWLIST")),
 		DryRun:            envBool("CISCO_SPACES_DRY_RUN", false),
+		AllowSecondary:    envBool("CISCO_SPACES_ALLOW_SECONDARY", false),
 		Debug:             envBool("CISCO_SPACES_DEBUG", false),
 		PruneBLESensors:   envBool("CISCO_SPACES_PRUNE_CONFIGURED_BLE_SENSORS", true),
 		SensorsFile:       envString("BLE_SENSORS_FILE", defaultSensorsFile),
@@ -301,6 +323,29 @@ func loadConfig() config {
 		cfg.BatteryMode = "all"
 	}
 	return cfg
+}
+
+func acquireCiscoSpacesLock(ctx context.Context, db *pgx.Conn) (func(), error) {
+	var locked bool
+	if err := db.QueryRow(ctx, `SELECT pg_try_advisory_lock($1)`, ciscoSpacesLockKey).Scan(&locked); err != nil {
+		return nil, err
+	}
+	if !locked {
+		return nil, errors.New("another hm-cisco-spaces-collector already holds the Firehose lock")
+	}
+	log.Printf("acquired Cisco Spaces Firehose advisory lock key=%d", ciscoSpacesLockKey)
+	return func() {
+		releaseCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		var released bool
+		if err := db.QueryRow(releaseCtx, `SELECT pg_advisory_unlock($1)`, ciscoSpacesLockKey).Scan(&released); err != nil {
+			log.Printf("release Cisco Spaces Firehose advisory lock: %v", err)
+			return
+		}
+		if !released {
+			log.Printf("Cisco Spaces Firehose advisory lock was not held during release")
+		}
+	}, nil
 }
 
 func newProcessor(cfg config) *processor {

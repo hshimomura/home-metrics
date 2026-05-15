@@ -33,6 +33,8 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      hm-db-migrate:
+        condition: service_completed_successfully
     environment:
       <<: *app_env
       API_ADDR: :8080
@@ -46,12 +48,27 @@ services:
       - "${API_BIND_ADDR:-0.0.0.0}:${API_PORT:-8080}:8080"
     command: ["hm-api-server"]
 
+  hm-db-migrate:
+    image: *app_image
+    build:
+      context: .
+    restart: "no"
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      <<: *app_env
+      DB_MIGRATIONS_DIR: ${DB_MIGRATIONS_DIR:-db/migrations}
+    command: ["hm-db-migrate"]
+
   hm-alert-worker:
     image: *app_image
     restart: unless-stopped
     depends_on:
       db:
         condition: service_healthy
+      hm-db-migrate:
+        condition: service_completed_successfully
     environment:
       <<: *app_env
       ALERT_WORKER_INTERVAL: ${ALERT_WORKER_INTERVAL:-1m}
@@ -79,6 +96,8 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      hm-db-migrate:
+        condition: service_completed_successfully
     environment:
       <<: *app_env
       DB_MAINT_REFRESH_LOOKBACK: ${DB_MAINT_REFRESH_LOOKBACK:-336h}
@@ -93,6 +112,8 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      hm-db-migrate:
+        condition: service_completed_successfully
     environment:
       <<: *app_env
       BLE_SENSORS_FILE: /etc/home-metrics/sensors.json
@@ -108,6 +129,7 @@ services:
       CISCO_SPACES_BATTERY_MODE: ${CISCO_SPACES_BATTERY_MODE:-all}
       CISCO_SPACES_BATTERY_ALLOWLIST: ${CISCO_SPACES_BATTERY_ALLOWLIST:-}
       CISCO_SPACES_DRY_RUN: ${CISCO_SPACES_DRY_RUN:-false}
+      CISCO_SPACES_ALLOW_SECONDARY: ${CISCO_SPACES_ALLOW_SECONDARY:-false}
       CISCO_SPACES_DEBUG: ${CISCO_SPACES_DEBUG:-false}
       CISCO_SPACES_PRUNE_CONFIGURED_BLE_SENSORS: ${CISCO_SPACES_PRUNE_CONFIGURED_BLE_SENSORS:-true}
     volumes:
@@ -121,6 +143,8 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      hm-db-migrate:
+        condition: service_completed_successfully
     environment:
       <<: *app_env
       NATURE_REMO_TOKEN: ${NATURE_REMO_TOKEN:-}
@@ -137,6 +161,8 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      hm-db-migrate:
+        condition: service_completed_successfully
     environment:
       <<: *app_env
       APCUPSD_SERVER: ${APCUPSD_SERVER:-tcp://host.docker.internal:3551}
@@ -156,6 +182,8 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      hm-db-migrate:
+        condition: service_completed_successfully
     environment:
       <<: *app_env
       ECHONET_TARGET_IP: ${ECHONET_TARGET_IP:-}
@@ -176,6 +204,8 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      hm-db-migrate:
+        condition: service_completed_successfully
     environment:
       <<: *app_env
       BLE_ADAPTER: ${BLE_ADAPTER:-/org/bluez/hci0}

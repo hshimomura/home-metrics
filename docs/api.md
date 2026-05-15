@@ -11,14 +11,18 @@
 https://metrics.example.com
 ```
 
-同一 host で配信される簡易 UI は `/` から開けます。
+同一 host で配信される簡易 UI は `/` から、管理 UI は `/admin` から開けます。
 
 ## Authentication
 
-`API_TOKEN` が backend に設定されている場合、`/` と `/api/health` 以外の
-API には token が必要です。未設定の場合は認証なしです。
+`API_TOKEN` が backend に設定されている場合、`/api/health` 以外の `/api/*`
+endpoint には token が必要です。未設定の場合は認証なしです。
 production では `API_REQUIRE_TOKEN=true` を設定すると、`API_TOKEN` が空の場合に
 API server が起動失敗します。
+
+HTML route の `/`、`/admin`、`/admin.html` は認証対象外です。管理 UI 自体は
+公開 HTML として配信されますが、画面内で呼び出す `/api/admin/*` endpoint は
+token 認証の対象です。
 
 推奨 header:
 
@@ -128,6 +132,11 @@ APNs 実送信を止めたい環境では、hm-alert-worker を
 `ALERT_WORKER_DRY_RUN=true` で動かします。
 
 ## Endpoints
+
+### GET /admin
+
+管理 UI を返します。collector status、health alerts、webhook delivery を
+既存 admin API から表示します。`/admin.html` も同じ内容を返します。
 
 ### GET /api/health
 

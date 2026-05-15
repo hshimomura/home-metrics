@@ -1,10 +1,12 @@
 PREFIX ?= /usr/local
 BINDIR ?= $(PREFIX)/bin
+DATADIR ?= $(PREFIX)/share/home-metrics
 INSTALL ?= install
 
 BINS := \
 	hm-ble-collector \
 	hm-db-check \
+	hm-db-migrate \
 	hm-alert-worker \
 	hm-api-server \
 	hm-db-maint \
@@ -26,11 +28,16 @@ install: build
 	for bin in $(BINS); do \
 		$(INSTALL) -m 0755 build/$$bin $(DESTDIR)$(BINDIR)/$$bin; \
 	done
+	$(INSTALL) -d $(DESTDIR)$(DATADIR)/migrations
+	for migration in db/migrations/*.sql; do \
+		$(INSTALL) -m 0644 $$migration $(DESTDIR)$(DATADIR)/migrations/$$(basename $$migration); \
+	done
 
 uninstall:
 	for bin in $(BINS); do \
 		rm -f $(DESTDIR)$(BINDIR)/$$bin; \
 	done
+	rm -rf $(DESTDIR)$(DATADIR)/migrations
 
 test:
 	mkdir -p .cache/go-build .cache/go-mod

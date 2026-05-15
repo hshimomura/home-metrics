@@ -10,6 +10,7 @@ go_mod_cache="${GOMODCACHE:-$PWD/.cache/go-mod}"
 bins=(
   hm-ble-collector
   hm-db-check
+  hm-db-migrate
   hm-alert-worker
   hm-api-server
   hm-db-maint

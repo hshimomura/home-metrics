@@ -22,6 +22,7 @@ WORKDIR /app
 
 COPY --from=builder /src/build/ /usr/local/bin/
 COPY --from=builder /src/web/ ./web/
+COPY --from=builder /src/db/migrations/ ./db/migrations/
 COPY --from=builder /src/examples/sensors.json.example /etc/home-metrics/sensors.json
 COPY docker/scripts/run-db-maint-loop /usr/local/bin/run-db-maint-loop
 

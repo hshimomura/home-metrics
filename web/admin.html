@@ -1,0 +1,267 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Home Metrics Admin</title>
+  <style>
+    :root { color-scheme: light dark; font-family: system-ui, sans-serif; }
+    body { margin: 0; background: #f6f7f8; color: #202124; }
+    main { max-width: 1240px; margin: 0 auto; padding: 24px; }
+    header { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 20px; }
+    h1 { font-size: 24px; margin: 0; }
+    h2 { font-size: 17px; margin: 0 0 12px; }
+    section { margin: 20px 0; }
+    a { color: #0b57d0; }
+    table { width: 100%; border-collapse: collapse; background: #fff; border: 1px solid #d9dee3; }
+    th, td { padding: 9px 10px; border-bottom: 1px solid #e4e7eb; text-align: left; font-size: 14px; vertical-align: top; }
+    th { background: #eef1f4; font-weight: 650; white-space: nowrap; }
+    tr:last-child td { border-bottom: 0; }
+    tr.targeted td { background: #fff8d6; box-shadow: inset 3px 0 0 #f9ab00; }
+    code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; }
+    input { padding: 7px 8px; border: 1px solid #b8c0c8; border-radius: 6px; min-width: 240px; }
+    button { padding: 8px 12px; border: 1px solid #7c8a97; border-radius: 6px; background: #fff; cursor: pointer; }
+    button:hover { background: #eef1f4; }
+    button:disabled { cursor: wait; opacity: 0.65; }
+    .toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+    .summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px; }
+    .summary-item { border: 1px solid #d9dee3; background: #fff; padding: 12px; }
+    .summary-label { color: #5f6b76; font-size: 12px; }
+    .summary-value { font-size: 22px; font-weight: 700; margin-top: 4px; }
+    .pill { display: inline-block; padding: 2px 7px; border-radius: 999px; font-size: 12px; border: 1px solid #c7ced6; }
+    .ok { color: #146c2e; background: #e6f4ea; border-color: #9ad0a6; }
+    .warning { color: #8a4b00; background: #fff4de; border-color: #e7bc6b; }
+    .critical, .failed, .firing { color: #a61b1b; background: #fce8e6; border-color: #e8a29a; }
+    .resolved, .sent { color: #146c2e; background: #e6f4ea; border-color: #9ad0a6; }
+    .disabled { color: #5f6b76; background: #f1f3f4; border-color: #c7ced6; }
+    .muted { color: #5f6b76; font-size: 13px; }
+    .error { color: #a61b1b; }
+    .mono-wrap { overflow-wrap: anywhere; }
+    @media (prefers-color-scheme: dark) {
+      body { background: #151719; color: #e8eaed; }
+      a { color: #8ab4f8; }
+      table, .summary-item { background: #1f2327; border-color: #363c42; }
+      th, td { border-bottom-color: #30363d; }
+      th { background: #2a3036; }
+      input, button { background: #1f2327; color: #e8eaed; border-color: #4b5560; }
+      button:hover { background: #2a3036; }
+      .summary-label, .muted { color: #a8b0b8; }
+      .ok, .resolved, .sent { color: #c8f2d0; background: #16351f; border-color: #2f6840; }
+      .warning { color: #ffe0a3; background: #442c05; border-color: #76511b; }
+      .critical, .failed, .firing { color: #ffd1cc; background: #4b1c19; border-color: #7e322c; }
+      .disabled { color: #a8b0b8; background: #2a3036; border-color: #4b5560; }
+      tr.targeted td { background: #3a320d; box-shadow: inset 3px 0 0 #fdd663; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <div>
+        <h1>Home Metrics Admin</h1>
+        <div class="muted" id="status">Loading</div>
+      </div>
+      <div class="toolbar">
+        <a href="/">Metrics</a>
+        <input id="token" type="password" placeholder="API token">
+        <button id="refresh">Refresh</button>
+      </div>
+    </header>
+
+    <section>
+      <h2>Health Summary</h2>
+      <div class="summary" id="summary"></div>
+    </section>
+
+    <section>
+      <h2>Collector Status</h2>
+      <table>
+        <thead><tr><th>Collector</th><th>Target</th><th>Last Attempt</th><th>Last Success</th><th>Last Data</th><th>Failures</th><th>Last Error</th></tr></thead>
+        <tbody id="collectors"></tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>Health Alerts</h2>
+      <table>
+        <thead><tr><th>Status</th><th>Severity</th><th>Title</th><th>Source</th><th>Summary</th><th>Updated</th><th>Last Notified</th><th>Action</th></tr></thead>
+        <tbody id="alerts"></tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>Webhook Delivery</h2>
+      <table>
+        <thead><tr><th>Created</th><th>Status</th><th>Event</th><th>Alert</th><th>HTTP</th><th>Error</th></tr></thead>
+        <tbody id="events"></tbody>
+      </table>
+    </section>
+  </main>
+
+  <script>
+    const token = document.querySelector('#token');
+    const statusLine = document.querySelector('#status');
+    token.value = localStorage.getItem('ble_api_token') || '';
+    token.addEventListener('change', () => localStorage.setItem('ble_api_token', token.value));
+    document.querySelector('#refresh').addEventListener('click', load);
+    window.addEventListener('hashchange', focusDeepLinkedAlert);
+    document.querySelector('#alerts').addEventListener('click', async event => {
+      const button = event.target.closest('button[data-test-alert]');
+      if (!button) return;
+      button.disabled = true;
+      statusLine.textContent = 'Sending test webhook';
+      statusLine.className = 'muted';
+      try {
+        const result = await postJSON(`/api/admin/health-alerts/${encodeURIComponent(button.dataset.testAlert)}/test-webhook`);
+        statusLine.textContent = `Test webhook ${result.status}: ${result.event_id}`;
+        await load();
+      } catch (err) {
+        statusLine.textContent = err.message;
+        statusLine.className = 'muted error';
+        button.disabled = false;
+      }
+    });
+
+    function headers() {
+      return token.value ? { Authorization: `Bearer ${token.value}` } : {};
+    }
+
+    async function getJSON(path) {
+      const res = await fetch(path, { headers: headers() });
+      if (!res.ok) throw new Error(`${path}: ${res.status}`);
+      return res.json();
+    }
+
+    async function postJSON(path) {
+      const res = await fetch(path, { method: 'POST', headers: headers() });
+      if (!res.ok) throw new Error(`${path}: ${res.status}`);
+      return res.json();
+    }
+
+    function escapeHTML(value) {
+      return String(value ?? '').replace(/[&<>"']/g, char => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+      }[char]));
+    }
+
+    function cell(value) {
+      return value === null || value === undefined || value === '' ? '-' : value;
+    }
+
+    function time(value) {
+      return value ? new Date(value).toLocaleString() : '-';
+    }
+
+    function age(value) {
+      if (!value) return '-';
+      const seconds = Math.max(0, Math.floor((Date.now() - new Date(value).getTime()) / 1000));
+      if (seconds < 90) return `${seconds}s ago`;
+      const minutes = Math.floor(seconds / 60);
+      if (minutes < 90) return `${minutes}m ago`;
+      const hours = Math.floor(minutes / 60);
+      if (hours < 48) return `${hours}h ago`;
+      return `${Math.floor(hours / 24)}d ago`;
+    }
+
+    function pill(value) {
+      return `<span class="pill ${escapeHTML(value)}">${escapeHTML(value)}</span>`;
+    }
+
+    function renderSummary(summary) {
+      const items = [
+        ['Status', pill(summary.status)],
+        ['Database', pill(summary.database)],
+        ['Collectors', summary.collector_targets],
+        ['Active alerts', summary.active_health_alerts],
+        ['Collector alerts', summary.stale_collectors],
+        ['Failed deliveries 24h', summary.failed_deliveries_24h],
+        ['Webhook', summary.webhook_configured ? pill('ok') : pill('disabled')],
+      ];
+      document.querySelector('#summary').innerHTML = items.map(([label, value]) => (
+        `<div class="summary-item"><div class="summary-label">${escapeHTML(label)}</div><div class="summary-value">${value}</div></div>`
+      )).join('');
+    }
+
+    function renderCollectors(items) {
+      document.querySelector('#collectors').innerHTML = items.map(item => `
+        <tr>
+          <td><code>${escapeHTML(item.collector_name)}</code></td>
+          <td class="mono-wrap"><code>${escapeHTML(item.target_type)} / ${escapeHTML(item.target_key)}</code></td>
+          <td>${time(item.last_attempt_at)}<div class="muted">${age(item.last_attempt_at)}</div></td>
+          <td>${time(item.last_success_at)}<div class="muted">${age(item.last_success_at)}</div></td>
+          <td>${time(item.last_data_at)}<div class="muted">${age(item.last_data_at)}</div></td>
+          <td>${item.consecutive_failures}</td>
+          <td class="mono-wrap">${escapeHTML(cell(item.last_error))}</td>
+        </tr>
+      `).join('') || '<tr><td colspan="7" class="muted">No collector status rows.</td></tr>';
+    }
+
+    function renderAlerts(items) {
+      document.querySelector('#alerts').innerHTML = items.map(item => `
+        <tr data-alert-key="${escapeHTML(item.alert_key)}">
+          <td>${pill(item.status)}</td>
+          <td>${pill(item.severity)}</td>
+          <td>${escapeHTML(item.title)}<div class="muted mono-wrap"><code>${escapeHTML(item.alert_key)}</code></div></td>
+          <td class="mono-wrap">${escapeHTML(item.source)}</td>
+          <td>${escapeHTML(item.summary)}</td>
+          <td>${time(item.updated_at)}<div class="muted">${age(item.updated_at)}</div></td>
+          <td>${time(item.last_notified_at)}</td>
+          <td><button data-test-alert="${escapeHTML(item.alert_key)}">Test webhook</button></td>
+        </tr>
+      `).join('') || '<tr><td colspan="8" class="muted">No health alerts.</td></tr>';
+      focusDeepLinkedAlert();
+    }
+
+    function renderEvents(items) {
+      document.querySelector('#events').innerHTML = items.map(item => `
+        <tr>
+          <td>${time(item.created_at)}<div class="muted">${age(item.created_at)}</div></td>
+          <td>${pill(item.status)}</td>
+          <td class="mono-wrap"><code>${escapeHTML(item.event_id)}</code></td>
+          <td class="mono-wrap"><code>${escapeHTML(item.alert_key)}</code></td>
+          <td>${cell(item.http_status)}</td>
+          <td class="mono-wrap">${escapeHTML(cell(item.error || item.response_body))}</td>
+        </tr>
+      `).join('') || '<tr><td colspan="6" class="muted">No health notification events.</td></tr>';
+    }
+
+    async function load() {
+      statusLine.textContent = 'Loading';
+      statusLine.className = 'muted';
+      try {
+        const [summary, collectors, alerts, events] = await Promise.all([
+          getJSON('/api/health/details'),
+          getJSON('/api/admin/collector-status'),
+          getJSON('/api/admin/health-alerts'),
+          getJSON('/api/admin/health-notification-events'),
+        ]);
+        renderSummary(summary);
+        renderCollectors(collectors);
+        renderAlerts(alerts);
+        renderEvents(events);
+        statusLine.textContent = `Loaded ${new Date().toLocaleString()}`;
+      } catch (err) {
+        statusLine.textContent = err.message;
+        statusLine.className = 'muted error';
+      }
+    }
+
+    function linkedAlertKey() {
+      if (!location.hash.startsWith('#alert=')) return '';
+      return decodeURIComponent(location.hash.slice('#alert='.length));
+    }
+
+    function focusDeepLinkedAlert() {
+      const key = linkedAlertKey();
+      document.querySelectorAll('#alerts tr.targeted').forEach(row => row.classList.remove('targeted'));
+      if (!key) return;
+      const row = [...document.querySelectorAll('#alerts tr[data-alert-key]')].find(item => item.dataset.alertKey === key);
+      if (!row) return;
+      row.classList.add('targeted');
+      row.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    }
+
+    load();
+  </script>
+</body>
+</html>

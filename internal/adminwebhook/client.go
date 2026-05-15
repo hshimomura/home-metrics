@@ -15,14 +15,19 @@ import (
 const maxResponsePreviewBytes = 2048
 
 type Payload struct {
-	EventID  string            `json:"event_id"`
-	Status   string            `json:"status"`
-	Severity string            `json:"severity"`
-	Title    string            `json:"title"`
-	Source   string            `json:"source"`
-	Summary  string            `json:"summary"`
-	Labels   map[string]string `json:"labels,omitempty"`
-	URL      string            `json:"url,omitempty"`
+	EventID          string            `json:"event_id"`
+	EventType        string            `json:"event_type,omitempty"`
+	Status           string            `json:"status"`
+	Severity         string            `json:"severity"`
+	AlertKey         string            `json:"alert_key,omitempty"`
+	Title            string            `json:"title"`
+	Source           string            `json:"source"`
+	Summary          string            `json:"summary"`
+	Labels           map[string]string `json:"labels,omitempty"`
+	Impact           map[string]any    `json:"impact,omitempty"`
+	Timestamps       map[string]string `json:"timestamps,omitempty"`
+	SuggestedActions []string          `json:"suggested_actions,omitempty"`
+	URL              string            `json:"url,omitempty"`
 }
 
 type Result struct {

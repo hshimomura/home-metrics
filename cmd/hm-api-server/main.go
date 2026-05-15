@@ -255,6 +255,8 @@ func main() {
 func newRouter(api *apiServer) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /", api.handleWebIndex)
+	mux.HandleFunc("GET /admin", api.handleWebAdmin)
+	mux.HandleFunc("GET /admin.html", api.handleWebAdmin)
 	mux.HandleFunc("GET /api/health", api.handleHealth)
 	mux.HandleFunc("GET /api/health/details", api.handleHealthDetails)
 	mux.HandleFunc("GET /api/admin/collector-status", api.handleCollectorStatus)
@@ -290,21 +292,33 @@ func (api *apiServer) handleWebIndex(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	file, err := os.Open("web/index.html")
+	api.serveWebFile(w, r, "web/index.html", "index.html")
+}
+
+func (api *apiServer) handleWebAdmin(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path != "/admin" && r.URL.Path != "/admin.html" {
+		http.NotFound(w, r)
+		return
+	}
+	api.serveWebFile(w, r, "web/admin.html", "admin.html")
+}
+
+func (api *apiServer) serveWebFile(w http.ResponseWriter, r *http.Request, path string, name string) {
+	file, err := os.Open(path)
 	if err != nil {
-		log.Printf("open web index: %v", err)
-		http.Error(w, "web index unavailable", http.StatusInternalServerError)
+		log.Printf("open %s: %v", path, err)
+		http.Error(w, "web page unavailable", http.StatusInternalServerError)
 		return
 	}
 	defer file.Close()
 	info, err := file.Stat()
 	if err != nil {
-		log.Printf("stat web index: %v", err)
-		http.Error(w, "web index unavailable", http.StatusInternalServerError)
+		log.Printf("stat %s: %v", path, err)
+		http.Error(w, "web page unavailable", http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	http.ServeContent(w, r, "index.html", info.ModTime(), file)
+	http.ServeContent(w, r, name, info.ModTime(), file)
 }
 
 func (api *apiServer) handleUnsupportedAPIEndpoint(w http.ResponseWriter, r *http.Request) {

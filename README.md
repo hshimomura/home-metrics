@@ -128,6 +128,11 @@ Edit `/etc/home-metrics/home-metrics.env` for host-specific settings such as `BL
 
 Edit `/etc/home-metrics/sensors.json` for BLE sensor MAC addresses, labels, device type, location, and enabled/disabled state. `db/schema.sql` intentionally does not seed personal sensor or energy device rows; use `examples/seed.example.sql` as a starting point for local metadata.
 
+`make install` installs migration files under `/usr/local/share/home-metrics/migrations` by default.
+For non-Docker deployments, run `hm-db-migrate` before starting the API, workers, or collectors and set
+`DB_MIGRATIONS_DIR=/usr/local/share/home-metrics/migrations` if the default working-directory relative
+`db/migrations` path is not available.
+
 ## Docker Compose
 
 Docker Compose で PostgreSQL / TimescaleDB と Home Metrics の各 daemon をまとめて起動できます。
@@ -139,6 +144,9 @@ docker compose up -d --build hm-api-server hm-alert-worker hm-db-maint
 
 DB は `timescale/timescaledb:latest-pg17` を使い、初回起動時に `db/schema.sql` と
 `db/energy_optimization.sql` を読み込みます。永続データは `pgdata` volume に保存します。
+既存 volume では `/docker-entrypoint-initdb.d/` は再実行されないため、通常起動時は
+one-shot の `hm-db-migrate` が `db/migrations/` の未適用 migration を適用します。
+適用済み migration は `schema_migrations` に version と checksum を保存します。
 
 DB は Compose network 内だけで公開し、collector は `db:5432` へ接続します。
 Cisco Spaces Firehose、Nature Remo、apcupsd、ECHONET Lite、BLE collector は
@@ -239,6 +247,7 @@ CISCO_SPACES_UPLOAD_INTERVAL
 CISCO_SPACES_BATTERY_MODE
 CISCO_SPACES_BATTERY_ALLOWLIST
 CISCO_SPACES_DRY_RUN
+CISCO_SPACES_ALLOW_SECONDARY
 CISCO_SPACES_DEBUG
 CISCO_SPACES_PRUNE_CONFIGURED_BLE_SENSORS
 ```
@@ -251,6 +260,10 @@ exponential backoff で再接続します。温度、湿度、気圧、CO2、照
 `CISCO_SPACES_STREAM_HEARTBEAT` は Firehose 接続中に collector liveness を
 `collector_status` へ記録する間隔です。telemetry が保存された時刻は
 `last_data_at` として別に記録されます。
+`CISCO_SPACES_ALLOW_SECONDARY=false` の場合、collector は Firehose 接続前に DB
+advisory lock を取得します。同じ DB を使う別の `hm-cisco-spaces-collector` が
+すでに動いている場合は起動失敗します。diagnostic run で一時的に重複接続を許可
+したい場合だけ、明示的に `CISCO_SPACES_ALLOW_SECONDARY=true` を指定します。
 `CISCO_SPACES_PRUNE_CONFIGURED_BLE_SENSORS=true` の場合、起動時に
 `BLE_SENSORS_FILE` の静的BLEセンサーを `devices` から外します。時系列データや
 alert rule がない行は削除し、残す必要がある行は `enabled=false` にします。
@@ -349,7 +362,7 @@ VALUES (1, 'aa:bb:cc:dd:ee:02', 'temperature_c', '>', 35, interval '24 hours');
 
 ## API Server
 
-iOS app や別アプリから DB を読むための最小 REST API です。初期実装は single user `id=1` 前提です。`API_TOKEN` を設定すると `/` と `/api/health` 以外に bearer token 認証を要求します。production では `API_REQUIRE_TOKEN=true` を設定すると、`API_TOKEN` が空のまま起動することを防げます。
+iOS app や別アプリから DB を読むための最小 REST API です。初期実装は single user `id=1` 前提です。`API_TOKEN` を設定すると `/api/health` 以外の `/api/*` endpoint に bearer token 認証を要求します。production では `API_REQUIRE_TOKEN=true` を設定すると、`API_TOKEN` が空のまま起動することを防げます。
 
 ```bash
 BLE_DB_DSN='dbname=ble_sensors host=/var/run/postgresql' \
@@ -363,12 +376,15 @@ hm-api-server
 systemd では `/etc/home-metrics/home-metrics.env` に `API_TOKEN=...` と必要に応じて `API_ALLOWED_ORIGINS=...` を置きます。このファイルは Git 管理外で、全 service が共通の `EnvironmentFile` として読み込みます。
 
 ブラウザで `http://localhost:8080/` を開くと簡易Web UIで latest values, alert rules, notification events を確認できます。
+管理画面は `http://localhost:8080/admin` で、collector status、health alerts、webhook delivery を確認できます。HTML route の `/` と `/admin` は公開配信されますが、画面内で呼び出す `/api/admin/*` は token 認証の対象です。
 
 主な endpoint:
 
 ```text
 GET    /api/health
 GET    /api/health/details
+GET    /admin
+GET    /admin.html
 GET    /api/admin/collector-status
 GET    /api/admin/health-alerts
 GET    /api/admin/health-notification-events
@@ -518,6 +534,7 @@ sudo cp deploy/hm-nature-remo-collector.service /etc/systemd/system/
 sudo cp deploy/hm-echonet-collector.service /etc/systemd/system/
 sudo cp deploy/hm-apcupsd-collector.service /etc/systemd/system/
 sudo systemctl daemon-reload
+sudo env DB_MIGRATIONS_DIR=/usr/local/share/home-metrics/migrations hm-db-migrate
 sudo systemctl enable --now hm-ble-collector.service
 # Use Cisco Spaces instead of local BLE scanning when the host has no BLE adapter.
 # sudo systemctl enable --now hm-cisco-spaces-collector.service
