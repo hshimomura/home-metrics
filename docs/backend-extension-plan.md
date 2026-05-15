@@ -52,7 +52,9 @@ CREATE TABLE IF NOT EXISTS collector_status (
     collector_name text NOT NULL,
     target_type text NOT NULL,
     target_key text NOT NULL DEFAULT 'default',
+    last_attempt_at timestamptz,
     last_success_at timestamptz,
+    last_data_at timestamptz,
     last_failure_at timestamptz,
     last_error text,
     consecutive_failures integer NOT NULL DEFAULT 0,
@@ -88,13 +90,18 @@ ble_adapter
 
 各 collector が記録するべき状態:
 
-- 収集と DB 書き込みに成功した時刻
+- 収集 loop を試みた時刻
+- 収集 loop が成功した時刻
+- 利用可能なデータを DB に書けた時刻
 - API error、network timeout、target device timeout などの読み取り失敗
 - DB 書き込み失敗
 
 意味の切り分け:
 
-- `last_success_at`: collector が収集経路を完了し、利用可能なデータを DB に書けた。
+- `last_attempt_at`: collector が収集処理を試みた。成功・失敗の両方で更新する。
+- `last_success_at`: collector が収集経路を完了した。データが 0 件でも、collector
+  自体が動作していることを示す。
+- `last_data_at`: collector が利用可能なデータを DB に書けた。
 - `last_failure_at` / `last_error`: collector が処理を試みたが失敗した。
 - `updated_at` が古い: collector 自体が停止、または stuck している可能性がある。
 - `consecutive_failures`: 復旧通知や通知 suppression の判断に使う。
@@ -103,6 +110,9 @@ ble_adapter
 
 - `db/schema.sql` に `collector_status` が追加されている。
 - active production collector が成功・失敗を upsert している。
+- long-lived stream collector は、接続維持中に heartbeat で `last_success_at` /
+  `updated_at` を更新する。Cisco Spaces では `CISCO_SPACES_STREAM_HEARTBEAT`
+  を使い、telemetry 保存時だけ `last_data_at` を更新する。
 - container logs を読まずに SQL だけで collector の状態を確認できる。
 - この phase では push 通知までは実装しない。
 
@@ -115,6 +125,8 @@ health evaluator が見るもの:
 
 - `collector_status.updated_at` による collector の生存状態
 - `collector_status.consecutive_failures` と `last_error` による連続失敗
+- `collector_status.last_data_at` による「collector は動いているがデータが来ていない」
+  状態
 - `sensor_minute` による BLE / Cisco Spaces sensor freshness
 - `energy_readings` による Nature Remo / ECHONET / APC UPS freshness
 

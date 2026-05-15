@@ -15,6 +15,8 @@ import (
 	"syscall"
 	"time"
 
+	"home-metrics/internal/collectorstatus"
+
 	"github.com/jackc/pgx/v5"
 )
 
@@ -84,9 +86,17 @@ func main() {
 	}
 
 	client := &http.Client{Timeout: 20 * time.Second}
+	statusTarget := collectorstatus.Target{
+		CollectorName: "hm-nature-remo-collector",
+		TargetType:    "nature_remo_device",
+		TargetKey:     deviceKey,
+	}
 	log.Printf("nature remo collector started interval=%s device=%s", interval, deviceKey)
 	if err := runOnce(ctx, db, client, apiURL, token, deviceKey); err != nil {
 		log.Printf("collect nature remo: %v", err)
+		reportCollectorFailure(ctx, db, statusTarget, err)
+	} else {
+		reportCollectorSuccess(ctx, db, statusTarget)
 	}
 	if runOnceOnly {
 		return
@@ -101,8 +111,23 @@ func main() {
 		case <-ticker.C:
 			if err := runOnce(ctx, db, client, apiURL, token, deviceKey); err != nil {
 				log.Printf("collect nature remo: %v", err)
+				reportCollectorFailure(ctx, db, statusTarget, err)
+			} else {
+				reportCollectorSuccess(ctx, db, statusTarget)
 			}
 		}
+	}
+}
+
+func reportCollectorSuccess(ctx context.Context, db *pgx.Conn, target collectorstatus.Target) {
+	if err := collectorstatus.MarkDataSuccess(ctx, db, target); err != nil {
+		log.Printf("record collector success: %v", err)
+	}
+}
+
+func reportCollectorFailure(ctx context.Context, db *pgx.Conn, target collectorstatus.Target, failure error) {
+	if err := collectorstatus.MarkFailure(ctx, db, target, failure); err != nil {
+		log.Printf("record collector failure: %v", err)
 	}
 }
 
