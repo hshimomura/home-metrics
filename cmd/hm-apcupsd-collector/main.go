@@ -18,6 +18,8 @@ import (
 	"syscall"
 	"time"
 
+	"home-metrics/internal/collectorstatus"
+
 	"github.com/jackc/pgx/v5"
 )
 
@@ -67,9 +69,17 @@ func main() {
 	}
 	defer db.Close(context.Background())
 
+	statusTarget := collectorstatus.Target{
+		CollectorName: "hm-apcupsd-collector",
+		TargetType:    "apcupsd_server",
+		TargetKey:     deviceKey,
+	}
 	log.Printf("apcupsd collector started server=%s interval=%s device=%s", server, interval, deviceKey)
 	if err := runOnce(ctx, db, server, timeout, deviceKey, label, location); err != nil {
 		log.Printf("collect apcupsd: %v", err)
+		reportCollectorFailure(ctx, db, statusTarget, err)
+	} else {
+		reportCollectorSuccess(ctx, db, statusTarget)
 	}
 	if runOnceOnly {
 		return
@@ -84,8 +94,23 @@ func main() {
 		case <-ticker.C:
 			if err := runOnce(ctx, db, server, timeout, deviceKey, label, location); err != nil {
 				log.Printf("collect apcupsd: %v", err)
+				reportCollectorFailure(ctx, db, statusTarget, err)
+			} else {
+				reportCollectorSuccess(ctx, db, statusTarget)
 			}
 		}
+	}
+}
+
+func reportCollectorSuccess(ctx context.Context, db *pgx.Conn, target collectorstatus.Target) {
+	if err := collectorstatus.MarkDataSuccess(ctx, db, target); err != nil {
+		log.Printf("record collector success: %v", err)
+	}
+}
+
+func reportCollectorFailure(ctx context.Context, db *pgx.Conn, target collectorstatus.Target, failure error) {
+	if err := collectorstatus.MarkFailure(ctx, db, target, failure); err != nil {
+		log.Printf("record collector failure: %v", err)
 	}
 }
 

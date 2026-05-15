@@ -169,6 +169,20 @@ CREATE INDEX IF NOT EXISTS notification_events_user_created_idx
 CREATE INDEX IF NOT EXISTS notification_events_rule_created_idx
     ON notification_events (alert_rule_id, created_at DESC);
 
+CREATE TABLE IF NOT EXISTS collector_status (
+    collector_name text NOT NULL,
+    target_type text NOT NULL,
+    target_key text NOT NULL DEFAULT 'default',
+    last_attempt_at timestamptz,
+    last_success_at timestamptz,
+    last_data_at timestamptz,
+    last_failure_at timestamptz,
+    last_error text,
+    consecutive_failures integer NOT NULL DEFAULT 0,
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (collector_name, target_type, target_key)
+);
+
 CREATE TABLE IF NOT EXISTS energy_devices (
     source text NOT NULL,
     device_key text NOT NULL,

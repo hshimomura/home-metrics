@@ -15,8 +15,11 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
+
+	"home-metrics/internal/collectorstatus"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -30,6 +33,7 @@ const (
 	defaultUploadInterval    = time.Minute
 	defaultReconnectMinDelay = time.Second
 	defaultReconnectMaxDelay = time.Minute
+	defaultStreamHeartbeat   = time.Minute
 )
 
 type config struct {
@@ -41,6 +45,7 @@ type config struct {
 	UploadInterval    time.Duration
 	ReconnectMinDelay time.Duration
 	ReconnectMaxDelay time.Duration
+	StreamHeartbeat   time.Duration
 	BatteryMode       string
 	BatteryAllowlist  map[string]bool
 	DryRun            bool
@@ -152,6 +157,45 @@ type processor struct {
 	lastUploads map[string]time.Time
 }
 
+type statusReporter struct {
+	mu     *sync.Mutex
+	db     *pgx.Conn
+	target collectorstatus.Target
+}
+
+func (r *statusReporter) MarkSuccess(ctx context.Context) {
+	if r == nil || r.db == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if err := collectorstatus.MarkSuccess(ctx, r.db, r.target); err != nil {
+		log.Printf("record collector success: %v", err)
+	}
+}
+
+func (r *statusReporter) MarkDataSuccess(ctx context.Context) {
+	if r == nil || r.db == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if err := collectorstatus.MarkDataSuccess(ctx, r.db, r.target); err != nil {
+		log.Printf("record collector data success: %v", err)
+	}
+}
+
+func (r *statusReporter) MarkFailure(ctx context.Context, failure error) {
+	if r == nil || r.db == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if err := collectorstatus.MarkFailure(ctx, r.db, r.target, failure); err != nil {
+		log.Printf("record collector failure: %v", err)
+	}
+}
+
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -182,8 +226,19 @@ func main() {
 
 	p := newProcessor(cfg)
 	client := &http.Client{}
+	statusTarget := collectorstatus.Target{
+		CollectorName: "hm-cisco-spaces-collector",
+		TargetType:    "cisco_spaces_firehose",
+		TargetKey:     "default",
+	}
+	dbMu := &sync.Mutex{}
+	reporter := &statusReporter{mu: dbMu, db: db, target: statusTarget}
 	log.Printf("Cisco Spaces collector started url=%s db=%s dry_run=%t", cfg.FirehoseURL, cfg.DBDSN, cfg.DryRun)
-	streamWithReconnect(ctx, client, cfg, func(event firehoseEvent) {
+	streamWithReconnect(ctx, client, cfg, func(err error) {
+		reporter.MarkFailure(ctx, err)
+	}, func() {
+		reporter.MarkSuccess(ctx)
+	}, func(event firehoseEvent) {
 		reading, ok, err := p.processEvent(event)
 		if err != nil {
 			log.Printf("process Cisco Spaces event: %v", err)
@@ -196,10 +251,15 @@ func main() {
 			log.Printf("dry-run Cisco Spaces reading mac=%s ts=%s", reading.MAC, reading.TS.Format(time.RFC3339))
 			return
 		}
-		if err := writeReading(ctx, db, reading); err != nil {
+		dbMu.Lock()
+		err = writeReading(ctx, db, reading)
+		dbMu.Unlock()
+		if err != nil {
 			log.Printf("write Cisco Spaces reading mac=%s ts=%s: %v", reading.MAC, reading.TS.Format(time.RFC3339), err)
+			reporter.MarkFailure(ctx, err)
 			return
 		}
+		reporter.MarkDataSuccess(ctx)
 		log.Printf("stored Cisco Spaces reading mac=%s ts=%s", reading.MAC, reading.TS.Format(time.RFC3339))
 	})
 }
@@ -214,6 +274,7 @@ func loadConfig() config {
 		UploadInterval:    envDuration("CISCO_SPACES_UPLOAD_INTERVAL", defaultUploadInterval),
 		ReconnectMinDelay: envDuration("CISCO_SPACES_RECONNECT_MIN_DELAY", defaultReconnectMinDelay),
 		ReconnectMaxDelay: envDuration("CISCO_SPACES_RECONNECT_MAX_DELAY", defaultReconnectMaxDelay),
+		StreamHeartbeat:   envDuration("CISCO_SPACES_STREAM_HEARTBEAT", defaultStreamHeartbeat),
 		BatteryMode:       strings.ToLower(envString("CISCO_SPACES_BATTERY_MODE", "all")),
 		BatteryAllowlist:  parseMACSet(os.Getenv("CISCO_SPACES_BATTERY_ALLOWLIST")),
 		DryRun:            envBool("CISCO_SPACES_DRY_RUN", false),
@@ -229,6 +290,9 @@ func loadConfig() config {
 	}
 	if cfg.ReconnectMaxDelay < cfg.ReconnectMinDelay {
 		cfg.ReconnectMaxDelay = cfg.ReconnectMinDelay
+	}
+	if cfg.StreamHeartbeat <= 0 {
+		cfg.StreamHeartbeat = defaultStreamHeartbeat
 	}
 	switch cfg.BatteryMode {
 	case "all", "allowlist", "off":
@@ -248,14 +312,17 @@ func newProcessor(cfg config) *processor {
 	}
 }
 
-func streamWithReconnect(ctx context.Context, client *http.Client, cfg config, handle func(firehoseEvent)) {
+func streamWithReconnect(ctx context.Context, client *http.Client, cfg config, handleError func(error), handleHeartbeat func(), handle func(firehoseEvent)) {
 	backoff := cfg.ReconnectMinDelay
 	for ctx.Err() == nil {
-		err := streamOnce(ctx, client, cfg, handle)
+		err := streamOnce(ctx, client, cfg, handleHeartbeat, handle)
 		if ctx.Err() != nil {
 			return
 		}
 		log.Printf("Cisco Spaces stream ended: %v; reconnecting in %s", err, backoff)
+		if handleError != nil {
+			handleError(err)
+		}
 		select {
 		case <-ctx.Done():
 			return
@@ -268,7 +335,7 @@ func streamWithReconnect(ctx context.Context, client *http.Client, cfg config, h
 	}
 }
 
-func streamOnce(ctx context.Context, client *http.Client, cfg config, handle func(firehoseEvent)) error {
+func streamOnce(ctx context.Context, client *http.Client, cfg config, handleHeartbeat func(), handle func(firehoseEvent)) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, cfg.FirehoseURL, nil)
 	if err != nil {
 		return err
@@ -283,6 +350,12 @@ func streamOnce(ctx context.Context, client *http.Client, cfg config, handle fun
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
 		body, _ := io.ReadAll(io.LimitReader(res.Body, 1024))
 		return fmt.Errorf("firehose status=%d body=%s", res.StatusCode, strings.TrimSpace(string(body)))
+	}
+	if handleHeartbeat != nil {
+		heartbeatCtx, cancelHeartbeat := context.WithCancel(ctx)
+		defer cancelHeartbeat()
+		handleHeartbeat()
+		go streamHeartbeat(heartbeatCtx, cfg.StreamHeartbeat, handleHeartbeat)
 	}
 
 	scanner := bufio.NewScanner(res.Body)
@@ -303,6 +376,19 @@ func streamOnce(ctx context.Context, client *http.Client, cfg config, handle fun
 		return err
 	}
 	return errors.New("firehose response closed")
+}
+
+func streamHeartbeat(ctx context.Context, interval time.Duration, handleHeartbeat func()) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			handleHeartbeat()
+		}
+	}
 }
 
 func (p *processor) processEvent(event firehoseEvent) (sensorReading, bool, error) {

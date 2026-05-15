@@ -16,6 +16,8 @@ import (
 	"syscall"
 	"time"
 
+	"home-metrics/internal/collectorstatus"
+
 	"github.com/godbus/dbus/v5"
 	"github.com/jackc/pgx/v5"
 )
@@ -152,6 +154,11 @@ func main() {
 	ticker := time.NewTicker(pollInterval)
 	defer ticker.Stop()
 
+	statusTarget := collectorstatus.Target{
+		CollectorName: "hm-ble-collector",
+		TargetType:    "ble_adapter",
+		TargetKey:     string(adapterPath),
+	}
 	log.Printf("BLE collector started adapter=%s poll=%s db=%s outlier_filter=%t", adapterPath, pollInterval, dsn, outliers.Enabled)
 	for {
 		select {
@@ -164,16 +171,41 @@ func main() {
 			readings, err := pollReadings(systemBus, targets)
 			if err != nil {
 				log.Printf("poll readings: %v", err)
+				reportCollectorFailure(ctx, db, statusTarget, err)
 				continue
 			}
 			now := time.Now()
 			for _, r := range readings {
 				c.add(r)
 			}
-			if err := c.flushCompleted(ctx, now.Truncate(time.Minute)); err != nil {
+			flushed, err := c.flushCompleted(ctx, now.Truncate(time.Minute))
+			if err != nil {
 				log.Printf("flush completed windows: %v", err)
+				reportCollectorFailure(ctx, db, statusTarget, err)
+			} else if flushed > 0 {
+				reportCollectorDataSuccess(ctx, db, statusTarget)
+			} else {
+				reportCollectorSuccess(ctx, db, statusTarget)
 			}
 		}
+	}
+}
+
+func reportCollectorSuccess(ctx context.Context, db *pgx.Conn, target collectorstatus.Target) {
+	if err := collectorstatus.MarkSuccess(ctx, db, target); err != nil {
+		log.Printf("record collector success: %v", err)
+	}
+}
+
+func reportCollectorDataSuccess(ctx context.Context, db *pgx.Conn, target collectorstatus.Target) {
+	if err := collectorstatus.MarkDataSuccess(ctx, db, target); err != nil {
+		log.Printf("record collector data success: %v", err)
+	}
+}
+
+func reportCollectorFailure(ctx context.Context, db *pgx.Conn, target collectorstatus.Target, failure error) {
+	if err := collectorstatus.MarkFailure(ctx, db, target, failure); err != nil {
+		log.Printf("record collector failure: %v", err)
 	}
 }
 
@@ -568,24 +600,29 @@ func appendPtr(values *[]float64, value *float64) {
 	}
 }
 
-func (c *collector) flushCompleted(ctx context.Context, currentWindow time.Time) error {
+func (c *collector) flushCompleted(ctx context.Context, currentWindow time.Time) (int, error) {
 	var errs []error
+	flushed := 0
 	for key, agg := range c.windows {
 		if agg.Window.Before(currentWindow) {
-			if err := c.flush(ctx, agg); err != nil {
+			wrote, err := c.flush(ctx, agg)
+			if err != nil {
 				errs = append(errs, err)
 				continue
+			}
+			if wrote {
+				flushed++
 			}
 			delete(c.windows, key)
 		}
 	}
-	return errors.Join(errs...)
+	return flushed, errors.Join(errs...)
 }
 
 func (c *collector) flushAll(ctx context.Context) error {
 	var errs []error
 	for key, agg := range c.windows {
-		if err := c.flush(ctx, agg); err != nil {
+		if _, err := c.flush(ctx, agg); err != nil {
 			errs = append(errs, err)
 			continue
 		}
@@ -594,9 +631,9 @@ func (c *collector) flushAll(ctx context.Context) error {
 	return errors.Join(errs...)
 }
 
-func (c *collector) flush(ctx context.Context, agg *aggregate) error {
+func (c *collector) flush(ctx context.Context, agg *aggregate) (bool, error) {
 	if agg.empty() {
-		return nil
+		return false, nil
 	}
 	temperature := c.filterMetric(agg.SensorMAC, "temperature_c", agg.Window, nullableMedianFloat(agg.TemperatureC))
 	humidity := c.filterMetric(agg.SensorMAC, "humidity_percent", agg.Window, nullableMedianFloat(agg.HumidityPercent))
@@ -608,7 +645,7 @@ func (c *collector) flush(ctx context.Context, agg *aggregate) error {
 	etvoc := c.filterMetric(agg.SensorMAC, "etvoc", agg.Window, nullableMedianFloat(agg.ETVOC))
 	if temperature == nil && humidity == nil && battery == nil && rssi == nil &&
 		pressure == nil && co2 == nil && lux == nil && etvoc == nil {
-		return nil
+		return false, nil
 	}
 	_, err := c.db.Exec(ctx, `
 		INSERT INTO sensor_minute (
@@ -637,10 +674,10 @@ func (c *collector) flush(ctx context.Context, agg *aggregate) error {
 		nullablePtr(etvoc),
 	)
 	if err != nil {
-		return fmt.Errorf("insert %s %s: %w", agg.SensorMAC, agg.Window.Format(time.RFC3339), err)
+		return false, fmt.Errorf("insert %s %s: %w", agg.SensorMAC, agg.Window.Format(time.RFC3339), err)
 	}
 	log.Printf("flushed sensor=%s minute=%s", agg.SensorMAC, agg.Window.Format(time.RFC3339))
-	return nil
+	return true, nil
 }
 
 func (c *collector) filterMetric(mac string, name string, ts time.Time, value *float64) *float64 {

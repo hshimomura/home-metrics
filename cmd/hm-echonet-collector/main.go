@@ -15,6 +15,8 @@ import (
 	"syscall"
 	"time"
 
+	"home-metrics/internal/collectorstatus"
+
 	"github.com/jackc/pgx/v5"
 )
 
@@ -134,10 +136,18 @@ func main() {
 	if err != nil {
 		log.Fatalf("resolve echonet target: %v", err)
 	}
+	statusTarget := collectorstatus.Target{
+		CollectorName: "hm-echonet-collector",
+		TargetType:    "echonet_device",
+		TargetKey:     deviceKey,
+	}
 	log.Printf("echonet collector started target=%s device_key=%s interval=%s", targetAddr, deviceKey, pollInterval)
 
 	if err := pollOnce(ctx, conn, db, targetAddr, deviceKey, requestTimeout); err != nil {
 		log.Printf("poll echonet: %v", err)
+		reportCollectorFailure(ctx, db, statusTarget, err)
+	} else {
+		reportCollectorSuccess(ctx, db, statusTarget)
 	}
 	if runOnceOnly {
 		return
@@ -152,8 +162,23 @@ func main() {
 		case <-ticker.C:
 			if err := pollOnce(ctx, conn, db, targetAddr, deviceKey, requestTimeout); err != nil {
 				log.Printf("poll echonet: %v", err)
+				reportCollectorFailure(ctx, db, statusTarget, err)
+			} else {
+				reportCollectorSuccess(ctx, db, statusTarget)
 			}
 		}
+	}
+}
+
+func reportCollectorSuccess(ctx context.Context, db *pgx.Conn, target collectorstatus.Target) {
+	if err := collectorstatus.MarkDataSuccess(ctx, db, target); err != nil {
+		log.Printf("record collector success: %v", err)
+	}
+}
+
+func reportCollectorFailure(ctx context.Context, db *pgx.Conn, target collectorstatus.Target, failure error) {
+	if err := collectorstatus.MarkFailure(ctx, db, target, failure); err != nil {
+		log.Printf("record collector failure: %v", err)
 	}
 }
 
