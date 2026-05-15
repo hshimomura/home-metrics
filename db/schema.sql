@@ -183,6 +183,7 @@ CREATE TABLE IF NOT EXISTS collector_status (
     last_attempt_at timestamptz,
     last_success_at timestamptz,
     last_data_at timestamptz,
+    first_failure_at timestamptz,
     last_failure_at timestamptz,
     last_error text,
     consecutive_failures integer NOT NULL DEFAULT 0,

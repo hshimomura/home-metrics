@@ -55,6 +55,7 @@ CREATE TABLE IF NOT EXISTS collector_status (
     last_attempt_at timestamptz,
     last_success_at timestamptz,
     last_data_at timestamptz,
+    first_failure_at timestamptz,
     last_failure_at timestamptz,
     last_error text,
     consecutive_failures integer NOT NULL DEFAULT 0,
@@ -102,6 +103,8 @@ ble_adapter
 - `last_success_at`: collector が収集経路を完了した。データが 0 件でも、collector
   自体が動作していることを示す。
 - `last_data_at`: collector が利用可能なデータを DB に書けた。
+- `first_failure_at`: 連続失敗が始まった時刻。一度も成功していない collector が
+  失敗し続ける場合の時間判定に使い、成功時に clear する。
 - `last_failure_at` / `last_error`: collector が処理を試みたが失敗した。
 - `updated_at` が古い: collector 自体が停止、または stuck している可能性がある。
 - `consecutive_failures`: 復旧通知や通知 suppression の判断に使う。
@@ -124,19 +127,30 @@ ble_adapter
 health evaluator が見るもの:
 
 - `collector_status.updated_at` による collector の生存状態
-- `collector_status.consecutive_failures` と `last_error` による連続失敗
+- `collector_status.last_success_at` による collector の成功 heartbeat
 - `collector_status.last_data_at` による「collector は動いているがデータが来ていない」
   状態
+- `collector_status.consecutive_failures` と `last_error` による原因説明
 - `sensor_minute` による BLE / Cisco Spaces sensor freshness
 - `energy_readings` による Nature Remo / ECHONET / APC UPS freshness
+
+基本方針:
+
+- 管理者 webhook の発火条件は「失敗回数」ではなく「時間」を主軸にする。
+- `consecutive_failures > 0` だけでは firing にしない。
+- `consecutive_failures` は alert trigger ではない。heartbeat stale / data stale
+  alert の context としてのみ使う。
+- `consecutive_failures`, `last_error`, `last_failure_at` は payload / summary の
+  context として使う。
+- severity は欠損時間で段階化する。短い timeout は記録してよいが、通知しない。
 
 判定例:
 
 - Cisco Spaces collector が 5 分以上 `collector_status` を更新していない。
 - Cisco Spaces collector は動いているが、特定の configured sensor が 30 分以上
   更新されていない。
-- ECHONET collector が対象機器 timeout を連続している。
-- APC UPS collector が apcupsd 読み取りに連続失敗している。
+- ECHONET collector は動いているが、対象機器の `last_data_at` が 15 分以上古い。
+- APC UPS collector は動いているが、UPS data の `last_data_at` が 15 分以上古い。
 - Nature Remo collector が API error、または成功書き込みの stale を起こしている。
 
 注意:
@@ -144,6 +158,50 @@ health evaluator が見るもの:
 - これらを既存の `alert_rules` に無理に入れない。
 - 値の閾値 alert と、状態・freshness alert は semantics が異なる。
 - 同じ worker process 内に実装してもよいが、評価ロジックと状態保存は分離する。
+
+### Time-Based Collector Health Thresholds
+
+collector health は、次の 3 種類を分けて判定する。
+
+| 判定 | 主に見る値 | 意味 | 通知 |
+| --- | --- | --- | --- |
+| heartbeat stale | `updated_at`, `last_success_at` | collector process / stream / DB reporting が止まった疑い | する |
+| data stale | `last_data_at` | collector は動いているが有効データが記録されていない | する |
+| failure context | `consecutive_failures`, `last_error`, `last_failure_at` | 直近の失敗理由 | 単独ではしない |
+
+推奨初期値:
+
+| collector | heartbeat warning | heartbeat critical | data warning | data critical | 理由 |
+| --- | ---: | ---: | ---: | ---: | --- |
+| `hm-echonet-collector` | 5m | 15m | 15m | 30m | 1分 polling だが UDP timeout が断続的に起きる。15分欠損で発電・蓄電池データの実害を見る。 |
+| `hm-cisco-spaces-collector` | 5m | 15m | 15m | 30m | stream heartbeat で process / DB / stream liveness を見る。Firehose event が静かな時間は data stale 側で吸収する。 |
+| `hm-nature-remo-collector` | 5m | 15m | 15m | 30m | cloud API / Wi-Fi の揺れを吸収しつつ、15分欠損で運用判断できる。 |
+| `hm-apcupsd-collector` | 5m | 15m | 15m | 30m | UPS は polling 型だが、短時間欠損で即時対応する必要は低い。 |
+
+実装は全体 default と collector 別 override を持つ。
+
+```text
+HEALTH_COLLECTOR_HEARTBEAT_WARNING_AFTER=5m
+HEALTH_COLLECTOR_HEARTBEAT_CRITICAL_AFTER=15m
+HEALTH_COLLECTOR_DATA_WARNING_AFTER=15m
+HEALTH_COLLECTOR_DATA_CRITICAL_AFTER=30m
+
+HEALTH_ECHONET_DATA_WARNING_AFTER=15m
+HEALTH_ECHONET_DATA_CRITICAL_AFTER=30m
+HEALTH_CISCO_SPACES_HEARTBEAT_WARNING_AFTER=5m
+HEALTH_CISCO_SPACES_HEARTBEAT_CRITICAL_AFTER=15m
+HEALTH_CISCO_SPACES_DATA_WARNING_AFTER=15m
+HEALTH_CISCO_SPACES_DATA_CRITICAL_AFTER=30m
+HEALTH_NATURE_REMO_DATA_WARNING_AFTER=15m
+HEALTH_NATURE_REMO_DATA_CRITICAL_AFTER=30m
+HEALTH_APCUPSD_DATA_WARNING_AFTER=15m
+HEALTH_APCUPSD_DATA_CRITICAL_AFTER=30m
+```
+
+既存の `HEALTH_COLLECTOR_STALE_AFTER` / `HEALTH_DATA_STALE_AFTER` は後方互換として
+warning threshold に map し、critical threshold は heartbeat では warning の 3 倍、
+data では warning の 2 倍、または明示 env を使う。
+新規実装では、`consecutive_failures` 単独 alert は廃止する。
 
 ## Phase 3: health_alert_state と通知履歴
 
@@ -478,8 +536,20 @@ container からの到達性を確認したことにはならない。疎通確�
 ```text
 HEALTH_EVALUATOR_ENABLED
 HEALTH_WEBHOOK_DRY_RUN
-HEALTH_COLLECTOR_STALE_AFTER
-HEALTH_DATA_STALE_AFTER
+HEALTH_COLLECTOR_HEARTBEAT_WARNING_AFTER
+HEALTH_COLLECTOR_HEARTBEAT_CRITICAL_AFTER
+HEALTH_COLLECTOR_DATA_WARNING_AFTER
+HEALTH_COLLECTOR_DATA_CRITICAL_AFTER
+HEALTH_ECHONET_DATA_WARNING_AFTER
+HEALTH_ECHONET_DATA_CRITICAL_AFTER
+HEALTH_CISCO_SPACES_HEARTBEAT_WARNING_AFTER
+HEALTH_CISCO_SPACES_HEARTBEAT_CRITICAL_AFTER
+HEALTH_CISCO_SPACES_DATA_WARNING_AFTER
+HEALTH_CISCO_SPACES_DATA_CRITICAL_AFTER
+HEALTH_NATURE_REMO_DATA_WARNING_AFTER
+HEALTH_NATURE_REMO_DATA_CRITICAL_AFTER
+HEALTH_APCUPSD_DATA_WARNING_AFTER
+HEALTH_APCUPSD_DATA_CRITICAL_AFTER
 HEALTH_SENSOR_STALE_AFTER
 HEALTH_ENERGY_STALE_AFTER
 HEALTH_NOTIFICATION_COOLDOWN
@@ -488,6 +558,14 @@ WEBHOOK_RELAY_URL
 WEBHOOK_RELAY_TOKEN
 WEBHOOK_RELAY_TIMEOUT=10s
 ```
+
+後方互換:
+
+- `HEALTH_COLLECTOR_STALE_AFTER` は `HEALTH_COLLECTOR_HEARTBEAT_WARNING_AFTER`
+  として扱う。
+- `HEALTH_DATA_STALE_AFTER` は `HEALTH_COLLECTOR_DATA_WARNING_AFTER` として扱う。
+- 明示 critical threshold がない場合、heartbeat は warning threshold の 3 倍、
+  data は warning threshold の 2 倍を使う。
 
 挙動:
 

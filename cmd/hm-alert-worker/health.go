@@ -27,12 +27,19 @@ const (
 
 type healthConfig struct {
 	Enabled              bool
-	CollectorStaleAfter  time.Duration
-	DataStaleAfter       time.Duration
+	DefaultThresholds    collectorHealthThresholds
+	CollectorOverrides   map[string]collectorHealthThresholds
 	SensorStaleAfter     time.Duration
 	EnergyStaleAfter     time.Duration
 	NotificationCooldown time.Duration
 	BaseURL              string
+}
+
+type collectorHealthThresholds struct {
+	HeartbeatWarningAfter  time.Duration
+	HeartbeatCriticalAfter time.Duration
+	DataWarningAfter       time.Duration
+	DataCriticalAfter      time.Duration
 }
 
 type healthAlert struct {
@@ -46,6 +53,20 @@ type healthAlert struct {
 	Impact           map[string]any
 	Timestamps       map[string]string
 	SuggestedActions []string
+}
+
+type collectorHealthRow struct {
+	CollectorName       string
+	TargetType          string
+	TargetKey           string
+	LastAttemptAt       pgtype.Timestamptz
+	LastSuccessAt       pgtype.Timestamptz
+	LastDataAt          pgtype.Timestamptz
+	FirstFailureAt      pgtype.Timestamptz
+	LastFailureAt       pgtype.Timestamptz
+	LastError           string
+	ConsecutiveFailures int
+	UpdatedAt           time.Time
 }
 
 type healthState struct {
@@ -129,15 +150,94 @@ func (webhookHealthNotifier) Mode() string {
 }
 
 func newHealthConfigFromEnv() healthConfig {
+	defaultThresholds := collectorHealthThresholds{
+		HeartbeatWarningAfter: envDurationFallback("HEALTH_COLLECTOR_HEARTBEAT_WARNING_AFTER", envDuration("HEALTH_COLLECTOR_STALE_AFTER", 5*time.Minute)),
+		DataWarningAfter:      envDurationFallback("HEALTH_COLLECTOR_DATA_WARNING_AFTER", envDuration("HEALTH_DATA_STALE_AFTER", 15*time.Minute)),
+	}
+	defaultThresholds.HeartbeatCriticalAfter = envDurationFallback("HEALTH_COLLECTOR_HEARTBEAT_CRITICAL_AFTER", defaultThresholds.HeartbeatWarningAfter*3)
+	defaultThresholds.DataCriticalAfter = envDurationFallback("HEALTH_COLLECTOR_DATA_CRITICAL_AFTER", defaultThresholds.DataWarningAfter*2)
 	return healthConfig{
 		Enabled:              envBool("HEALTH_EVALUATOR_ENABLED", false),
-		CollectorStaleAfter:  envDuration("HEALTH_COLLECTOR_STALE_AFTER", 5*time.Minute),
-		DataStaleAfter:       envDuration("HEALTH_DATA_STALE_AFTER", 30*time.Minute),
+		DefaultThresholds:    defaultThresholds,
+		CollectorOverrides:   collectorHealthOverridesFromEnv(defaultThresholds),
 		SensorStaleAfter:     envDuration("HEALTH_SENSOR_STALE_AFTER", 30*time.Minute),
 		EnergyStaleAfter:     envDuration("HEALTH_ENERGY_STALE_AFTER", 30*time.Minute),
 		NotificationCooldown: envDuration("HEALTH_NOTIFICATION_COOLDOWN", time.Hour),
 		BaseURL:              strings.TrimRight(strings.TrimSpace(os.Getenv("HOME_METRICS_BASE_URL")), "/"),
 	}
+}
+
+func envDurationFallback(name string, fallback time.Duration) time.Duration {
+	if strings.TrimSpace(os.Getenv(name)) == "" {
+		return fallback
+	}
+	return envDuration(name, fallback)
+}
+
+func collectorHealthOverridesFromEnv(defaults collectorHealthThresholds) map[string]collectorHealthThresholds {
+	return map[string]collectorHealthThresholds{
+		"hm-echonet-collector": collectorHealthThresholdsFromEnv(
+			"HEALTH_ECHONET",
+			defaults,
+			collectorHealthThresholds{
+				HeartbeatWarningAfter:  5 * time.Minute,
+				HeartbeatCriticalAfter: 15 * time.Minute,
+				DataWarningAfter:       15 * time.Minute,
+				DataCriticalAfter:      30 * time.Minute,
+			},
+		),
+		"hm-cisco-spaces-collector": collectorHealthThresholdsFromEnv(
+			"HEALTH_CISCO_SPACES",
+			defaults,
+			collectorHealthThresholds{
+				HeartbeatWarningAfter:  5 * time.Minute,
+				HeartbeatCriticalAfter: 15 * time.Minute,
+				DataWarningAfter:       15 * time.Minute,
+				DataCriticalAfter:      30 * time.Minute,
+			},
+		),
+		"hm-nature-remo-collector": collectorHealthThresholdsFromEnv(
+			"HEALTH_NATURE_REMO",
+			defaults,
+			collectorHealthThresholds{
+				HeartbeatWarningAfter:  5 * time.Minute,
+				HeartbeatCriticalAfter: 15 * time.Minute,
+				DataWarningAfter:       15 * time.Minute,
+				DataCriticalAfter:      30 * time.Minute,
+			},
+		),
+		"hm-apcupsd-collector": collectorHealthThresholdsFromEnv(
+			"HEALTH_APCUPSD",
+			defaults,
+			collectorHealthThresholds{
+				HeartbeatWarningAfter:  5 * time.Minute,
+				HeartbeatCriticalAfter: 15 * time.Minute,
+				DataWarningAfter:       15 * time.Minute,
+				DataCriticalAfter:      30 * time.Minute,
+			},
+		),
+	}
+}
+
+func collectorHealthThresholdsFromEnv(prefix string, defaults, recommended collectorHealthThresholds) collectorHealthThresholds {
+	thresholds := recommended
+	if thresholds.HeartbeatWarningAfter == 0 {
+		thresholds.HeartbeatWarningAfter = defaults.HeartbeatWarningAfter
+	}
+	if thresholds.HeartbeatCriticalAfter == 0 {
+		thresholds.HeartbeatCriticalAfter = thresholds.HeartbeatWarningAfter * 3
+	}
+	if thresholds.DataWarningAfter == 0 {
+		thresholds.DataWarningAfter = defaults.DataWarningAfter
+	}
+	if thresholds.DataCriticalAfter == 0 {
+		thresholds.DataCriticalAfter = thresholds.DataWarningAfter * 2
+	}
+	thresholds.HeartbeatWarningAfter = envDurationFallback(prefix+"_HEARTBEAT_WARNING_AFTER", thresholds.HeartbeatWarningAfter)
+	thresholds.HeartbeatCriticalAfter = envDurationFallback(prefix+"_HEARTBEAT_CRITICAL_AFTER", thresholds.HeartbeatCriticalAfter)
+	thresholds.DataWarningAfter = envDurationFallback(prefix+"_DATA_WARNING_AFTER", thresholds.DataWarningAfter)
+	thresholds.DataCriticalAfter = envDurationFallback(prefix+"_DATA_CRITICAL_AFTER", thresholds.DataCriticalAfter)
+	return thresholds
 }
 
 func newHealthNotifierFromEnv(dryRun bool, httpClient *http.Client) (healthNotifier, error) {
@@ -200,6 +300,7 @@ func evaluateCollectorHealth(ctx context.Context, db *pgx.Conn, cfg healthConfig
 			last_attempt_at,
 			last_success_at,
 			last_data_at,
+			first_failure_at,
 			last_failure_at,
 			COALESCE(last_error, ''),
 			consecutive_failures,
@@ -214,113 +315,156 @@ func evaluateCollectorHealth(ctx context.Context, db *pgx.Conn, cfg healthConfig
 
 	var alerts []healthAlert
 	for rows.Next() {
-		var collectorName, targetType, targetKey, lastError string
-		var lastAttemptAt, lastSuccessAt, lastDataAt, lastFailureAt pgtype.Timestamptz
-		var consecutiveFailures int
-		var updatedAt time.Time
+		var row collectorHealthRow
 		if err := rows.Scan(
-			&collectorName,
-			&targetType,
-			&targetKey,
-			&lastAttemptAt,
-			&lastSuccessAt,
-			&lastDataAt,
-			&lastFailureAt,
-			&lastError,
-			&consecutiveFailures,
-			&updatedAt,
+			&row.CollectorName,
+			&row.TargetType,
+			&row.TargetKey,
+			&row.LastAttemptAt,
+			&row.LastSuccessAt,
+			&row.LastDataAt,
+			&row.FirstFailureAt,
+			&row.LastFailureAt,
+			&row.LastError,
+			&row.ConsecutiveFailures,
+			&row.UpdatedAt,
 		); err != nil {
 			return nil, err
 		}
-		key := healthKey("collector", collectorName, targetType, targetKey)
-		labels := map[string]string{
-			"kind":           "collector",
-			"collector_name": collectorName,
-			"target_type":    targetType,
-			"target_key":     targetKey,
-		}
-		source := enrichedCollectorSource(collectorName, targetType, targetKey)
-		timestamps := collectorTimestamps(lastAttemptAt, lastSuccessAt, lastDataAt, lastFailureAt, updatedAt)
-		impact := collectorImpact(targetType, targetKey)
-		actions := suggestedCollectorActions(targetType)
-		if now.Sub(updatedAt) > cfg.CollectorStaleAfter {
-			alerts = append(alerts, healthAlert{
-				Key:              key,
-				Status:           healthStatusFiring,
-				Severity:         "critical",
-				Title:            "Collector heartbeat stale",
-				Source:           source,
-				Summary:          fmt.Sprintf("%s has not updated collector_status for %s.", source, roundDuration(now.Sub(updatedAt))),
-				Labels:           labels,
-				Impact:           impact,
-				Timestamps:       timestamps,
-				SuggestedActions: actions,
-			})
-			continue
-		}
-		if consecutiveFailures > 0 {
-			summary := fmt.Sprintf("%s has %d consecutive failure(s).", source, consecutiveFailures)
-			if strings.TrimSpace(lastError) != "" {
-				summary += " Last error: " + trimForSummary(lastError)
-			}
-			alerts = append(alerts, healthAlert{
-				Key:              key,
-				Status:           healthStatusFiring,
-				Severity:         "warning",
-				Title:            "Collector failures detected",
-				Source:           source,
-				Summary:          summary,
-				Labels:           labels,
-				Impact:           impact,
-				Timestamps:       timestamps,
-				SuggestedActions: actions,
-			})
-			continue
-		}
-		if lastDataAt.Valid && now.Sub(lastDataAt.Time) > cfg.DataStaleAfter {
-			alerts = append(alerts, healthAlert{
-				Key:              key,
-				Status:           healthStatusFiring,
-				Severity:         "warning",
-				Title:            "Collector data stale",
-				Source:           source,
-				Summary:          fmt.Sprintf("%s is alive, but no data has been recorded for %s.", source, roundDuration(now.Sub(lastDataAt.Time))),
-				Labels:           labels,
-				Impact:           impact,
-				Timestamps:       timestamps,
-				SuggestedActions: actions,
-			})
-			continue
-		}
-		if !lastDataAt.Valid && lastSuccessAt.Valid && now.Sub(lastSuccessAt.Time) > cfg.DataStaleAfter {
-			alerts = append(alerts, healthAlert{
-				Key:              key,
-				Status:           healthStatusFiring,
-				Severity:         "warning",
-				Title:            "Collector has no data",
-				Source:           source,
-				Summary:          fmt.Sprintf("%s has not recorded data since it began reporting success.", source),
-				Labels:           labels,
-				Impact:           impact,
-				Timestamps:       timestamps,
-				SuggestedActions: actions,
-			})
-			continue
-		}
-		alerts = append(alerts, healthAlert{
+		alerts = append(alerts, evaluateCollectorHealthRow(cfg, row, now))
+	}
+	return alerts, rows.Err()
+}
+
+func evaluateCollectorHealthRow(cfg healthConfig, row collectorHealthRow, now time.Time) healthAlert {
+	key := healthKey("collector", row.CollectorName, row.TargetType, row.TargetKey)
+	labels := map[string]string{
+		"kind":           "collector",
+		"collector_name": row.CollectorName,
+		"target_type":    row.TargetType,
+		"target_key":     row.TargetKey,
+	}
+	source := enrichedCollectorSource(row.CollectorName, row.TargetType, row.TargetKey)
+	timestamps := collectorTimestamps(row.LastAttemptAt, row.LastSuccessAt, row.LastDataAt, row.FirstFailureAt, row.LastFailureAt, row.UpdatedAt)
+	impact := collectorImpact(row.TargetType, row.TargetKey)
+	addCollectorFailureImpact(impact, row.ConsecutiveFailures, row.LastError, row.FirstFailureAt, row.LastFailureAt)
+	actions := suggestedCollectorActions(row.TargetType)
+	thresholds := collectorThresholds(cfg, row.CollectorName)
+	heartbeatAge, heartbeatSummary := collectorHeartbeatAge(now, row.UpdatedAt, row.LastSuccessAt, row.FirstFailureAt, source)
+	if heartbeatAge >= thresholds.HeartbeatWarningAfter {
+		return healthAlert{
 			Key:              key,
-			Status:           healthStatusResolved,
-			Severity:         "info",
-			Title:            "Collector recovered",
+			Status:           healthStatusFiring,
+			Severity:         severityForAge(heartbeatAge, thresholds.HeartbeatCriticalAfter),
+			Title:            "Collector heartbeat stale",
 			Source:           source,
-			Summary:          fmt.Sprintf("%s is reporting normally.", source),
+			Summary:          appendFailureContext(heartbeatSummary, row.ConsecutiveFailures, row.LastError),
 			Labels:           labels,
 			Impact:           impact,
 			Timestamps:       timestamps,
 			SuggestedActions: actions,
-		})
+		}
 	}
-	return alerts, rows.Err()
+	if row.LastDataAt.Valid && now.Sub(row.LastDataAt.Time) >= thresholds.DataWarningAfter {
+		dataAge := now.Sub(row.LastDataAt.Time)
+		summary := fmt.Sprintf("%s is alive, but no data has been recorded for %s.", source, roundDuration(dataAge))
+		return healthAlert{
+			Key:              key,
+			Status:           healthStatusFiring,
+			Severity:         severityForAge(dataAge, thresholds.DataCriticalAfter),
+			Title:            "Collector data stale",
+			Source:           source,
+			Summary:          appendFailureContext(summary, row.ConsecutiveFailures, row.LastError),
+			Labels:           labels,
+			Impact:           impact,
+			Timestamps:       timestamps,
+			SuggestedActions: actions,
+		}
+	}
+	if !row.LastDataAt.Valid && row.LastSuccessAt.Valid && now.Sub(row.LastSuccessAt.Time) >= thresholds.DataWarningAfter {
+		successAge := now.Sub(row.LastSuccessAt.Time)
+		summary := fmt.Sprintf("%s has not recorded data since it began reporting success.", source)
+		return healthAlert{
+			Key:              key,
+			Status:           healthStatusFiring,
+			Severity:         severityForAge(successAge, thresholds.DataCriticalAfter),
+			Title:            "Collector has no data",
+			Source:           source,
+			Summary:          appendFailureContext(summary, row.ConsecutiveFailures, row.LastError),
+			Labels:           labels,
+			Impact:           impact,
+			Timestamps:       timestamps,
+			SuggestedActions: actions,
+		}
+	}
+	return healthAlert{
+		Key:              key,
+		Status:           healthStatusResolved,
+		Severity:         "info",
+		Title:            "Collector recovered",
+		Source:           source,
+		Summary:          fmt.Sprintf("%s is reporting normally.", source),
+		Labels:           labels,
+		Impact:           impact,
+		Timestamps:       timestamps,
+		SuggestedActions: actions,
+	}
+}
+
+func collectorHeartbeatAge(now, updatedAt time.Time, lastSuccessAt, firstFailureAt pgtype.Timestamptz, source string) (time.Duration, string) {
+	updatedAge := now.Sub(updatedAt)
+	if !lastSuccessAt.Valid {
+		if firstFailureAt.Valid {
+			failureAge := now.Sub(firstFailureAt.Time)
+			return failureAge, fmt.Sprintf("%s has not reported collector success for %s.", source, roundDuration(failureAge))
+		}
+		return updatedAge, fmt.Sprintf("%s has not updated collector_status for %s.", source, roundDuration(updatedAge))
+	}
+	successAge := now.Sub(lastSuccessAt.Time)
+	if successAge > updatedAge {
+		return successAge, fmt.Sprintf("%s has not reported collector success for %s.", source, roundDuration(successAge))
+	}
+	return updatedAge, fmt.Sprintf("%s has not updated collector_status for %s.", source, roundDuration(updatedAge))
+}
+
+func collectorThresholds(cfg healthConfig, collectorName string) collectorHealthThresholds {
+	if thresholds, ok := cfg.CollectorOverrides[collectorName]; ok {
+		return thresholds
+	}
+	return cfg.DefaultThresholds
+}
+
+func severityForAge(age, criticalAfter time.Duration) string {
+	if age >= criticalAfter {
+		return "critical"
+	}
+	return "warning"
+}
+
+func appendFailureContext(summary string, consecutiveFailures int, lastError string) string {
+	if consecutiveFailures <= 0 {
+		return summary
+	}
+	summary += fmt.Sprintf(" Recent context: %d consecutive failure(s).", consecutiveFailures)
+	if strings.TrimSpace(lastError) != "" {
+		summary += " Last error: " + trimForSummary(lastError)
+	}
+	return summary
+}
+
+func addCollectorFailureImpact(impact map[string]any, consecutiveFailures int, lastError string, firstFailureAt, lastFailureAt pgtype.Timestamptz) {
+	if consecutiveFailures > 0 {
+		impact["consecutive_failures"] = consecutiveFailures
+	}
+	if strings.TrimSpace(lastError) != "" {
+		impact["last_error"] = trimForSummary(lastError)
+	}
+	if firstFailureAt.Valid {
+		impact["first_failure_at"] = firstFailureAt.Time.Format(time.RFC3339)
+	}
+	if lastFailureAt.Valid {
+		impact["last_failure_at"] = lastFailureAt.Time.Format(time.RFC3339)
+	}
 }
 
 func evaluateSensorFreshness(ctx context.Context, db *pgx.Conn, cfg healthConfig, now time.Time) ([]healthAlert, error) {
@@ -684,13 +828,14 @@ func enrichedCollectorSource(collectorName string, targetType string, targetKey 
 	}
 }
 
-func collectorTimestamps(lastAttemptAt, lastSuccessAt, lastDataAt, lastFailureAt pgtype.Timestamptz, updatedAt time.Time) map[string]string {
+func collectorTimestamps(lastAttemptAt, lastSuccessAt, lastDataAt, firstFailureAt, lastFailureAt pgtype.Timestamptz, updatedAt time.Time) map[string]string {
 	values := map[string]string{
 		"updated_at": updatedAt.Format(time.RFC3339),
 	}
 	addPgTimestamp(values, "last_attempt_at", lastAttemptAt)
 	addPgTimestamp(values, "last_success_at", lastSuccessAt)
 	addPgTimestamp(values, "last_data_at", lastDataAt)
+	addPgTimestamp(values, "first_failure_at", firstFailureAt)
 	addPgTimestamp(values, "last_failure_at", lastFailureAt)
 	return values
 }

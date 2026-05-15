@@ -23,6 +23,7 @@ type collectorStatusResponse struct {
 	LastAttemptAt       *time.Time `json:"last_attempt_at,omitempty"`
 	LastSuccessAt       *time.Time `json:"last_success_at,omitempty"`
 	LastDataAt          *time.Time `json:"last_data_at,omitempty"`
+	FirstFailureAt      *time.Time `json:"first_failure_at,omitempty"`
 	LastFailureAt       *time.Time `json:"last_failure_at,omitempty"`
 	LastError           string     `json:"last_error,omitempty"`
 	ConsecutiveFailures int        `json:"consecutive_failures"`
@@ -45,26 +46,26 @@ type healthAlertResponse struct {
 }
 
 type healthNotificationEventResponse struct {
-	ID           int64      `json:"id"`
-	EventID      string     `json:"event_id"`
-	AlertKey     string     `json:"alert_key"`
-	ChannelID    *int64     `json:"channel_id,omitempty"`
-	ChannelType  string     `json:"channel_type"`
-	Status       string     `json:"status"`
-	HTTPStatus   *int32     `json:"http_status,omitempty"`
-	ResponseBody string     `json:"response_body,omitempty"`
-	Error        string     `json:"error,omitempty"`
-	CreatedAt    time.Time  `json:"created_at"`
+	ID           int64     `json:"id"`
+	EventID      string    `json:"event_id"`
+	AlertKey     string    `json:"alert_key"`
+	ChannelID    *int64    `json:"channel_id,omitempty"`
+	ChannelType  string    `json:"channel_type"`
+	Status       string    `json:"status"`
+	HTTPStatus   *int32    `json:"http_status,omitempty"`
+	ResponseBody string    `json:"response_body,omitempty"`
+	Error        string    `json:"error,omitempty"`
+	CreatedAt    time.Time `json:"created_at"`
 }
 
 type healthDetailsResponse struct {
-	Status               string `json:"status"`
-	Database             string `json:"database"`
-	CollectorTargets     int    `json:"collector_targets"`
-	StaleCollectors      int    `json:"stale_collectors"`
-	ActiveHealthAlerts   int    `json:"active_health_alerts"`
-	FailedDeliveries24h  int    `json:"failed_deliveries_24h"`
-	WebhookConfigured    bool   `json:"webhook_configured"`
+	Status              string `json:"status"`
+	Database            string `json:"database"`
+	CollectorTargets    int    `json:"collector_targets"`
+	StaleCollectors     int    `json:"stale_collectors"`
+	ActiveHealthAlerts  int    `json:"active_health_alerts"`
+	FailedDeliveries24h int    `json:"failed_deliveries_24h"`
+	WebhookConfigured   bool   `json:"webhook_configured"`
 }
 
 type testHealthWebhookResponse struct {
@@ -108,6 +109,7 @@ func (api *apiServer) handleCollectorStatus(w http.ResponseWriter, r *http.Reque
 			last_attempt_at,
 			last_success_at,
 			last_data_at,
+			first_failure_at,
 			last_failure_at,
 			COALESCE(last_error, ''),
 			consecutive_failures,
@@ -124,7 +126,7 @@ func (api *apiServer) handleCollectorStatus(w http.ResponseWriter, r *http.Reque
 	items := []collectorStatusResponse{}
 	for rows.Next() {
 		var item collectorStatusResponse
-		var lastAttemptAt, lastSuccessAt, lastDataAt, lastFailureAt pgtype.Timestamptz
+		var lastAttemptAt, lastSuccessAt, lastDataAt, firstFailureAt, lastFailureAt pgtype.Timestamptz
 		if err := rows.Scan(
 			&item.CollectorName,
 			&item.TargetType,
@@ -132,6 +134,7 @@ func (api *apiServer) handleCollectorStatus(w http.ResponseWriter, r *http.Reque
 			&lastAttemptAt,
 			&lastSuccessAt,
 			&lastDataAt,
+			&firstFailureAt,
 			&lastFailureAt,
 			&item.LastError,
 			&item.ConsecutiveFailures,
@@ -143,6 +146,7 @@ func (api *apiServer) handleCollectorStatus(w http.ResponseWriter, r *http.Reque
 		item.LastAttemptAt = timePtrFromPg(lastAttemptAt)
 		item.LastSuccessAt = timePtrFromPg(lastSuccessAt)
 		item.LastDataAt = timePtrFromPg(lastDataAt)
+		item.FirstFailureAt = timePtrFromPg(firstFailureAt)
 		item.LastFailureAt = timePtrFromPg(lastFailureAt)
 		items = append(items, item)
 	}
