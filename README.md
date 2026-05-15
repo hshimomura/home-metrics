@@ -230,6 +230,9 @@ hm-cisco-spaces-collector
 
 ```text
 CISCO_SPACES_FIREHOSE_URL
+CISCO_SPACES_RECONNECT_MIN_DELAY
+CISCO_SPACES_RECONNECT_MAX_DELAY
+CISCO_SPACES_STREAM_HEARTBEAT
 CISCO_SPACES_SAMPLE_WINDOW
 CISCO_SPACES_FIELD_FRESHNESS
 CISCO_SPACES_UPLOAD_INTERVAL
@@ -245,6 +248,9 @@ exponential backoff で再接続します。温度、湿度、気圧、CO2、照
 は 5 sample median を使い、既知の sentinel 値は保存しません。Firehose の
 `tvoc.valueInPpb` は既存BLE importer の eTVOC と同じ表示単位に合わせるため
 1000 で割って保存します。
+`CISCO_SPACES_STREAM_HEARTBEAT` は Firehose 接続中に collector liveness を
+`collector_status` へ記録する間隔です。telemetry が保存された時刻は
+`last_data_at` として別に記録されます。
 `CISCO_SPACES_PRUNE_CONFIGURED_BLE_SENSORS=true` の場合、起動時に
 `BLE_SENSORS_FILE` の静的BLEセンサーを `devices` から外します。時系列データや
 alert rule がない行は削除し、残す必要がある行は `enabled=false` にします。
