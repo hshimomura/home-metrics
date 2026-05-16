@@ -29,6 +29,8 @@
     .summary-item { border: 1px solid #d9dee3; background: #fff; padding: 12px; }
     .summary-label { color: #5f6b76; font-size: 12px; }
     .summary-value { font-size: 22px; font-weight: 700; margin-top: 4px; }
+    .summary-value .summary-text,
+    .summary-value .timestamp { display: block; font-size: 14px; line-height: 1.25; font-weight: 650; }
     .pill { display: inline-block; padding: 2px 7px; border-radius: 999px; font-size: 12px; border: 1px solid #c7ced6; }
     .ok { color: #146c2e; background: #e6f4ea; border-color: #9ad0a6; }
     .warning { color: #8a4b00; background: #fff4de; border-color: #e7bc6b; }
@@ -188,6 +190,14 @@
       return `${Math.floor(hours / 24)}d ago`;
     }
 
+    function timeBlock(value) {
+      return value ? `<span class="timestamp">${escapeHTML(time(value))}</span><div class="muted">${age(value)}</div>` : '-';
+    }
+
+    function summaryText(value) {
+      return `<span class="summary-text">${value}</span>`;
+    }
+
     function pill(value) {
       return `<span class="pill ${escapeHTML(value)}">${escapeHTML(value)}</span>`;
     }
@@ -216,7 +226,7 @@
         ['Advisory lock', `${lock}<div class="muted">key ${escapeHTML(item.lock_key)}${item.lock_holder_pid ? ` / pid ${escapeHTML(item.lock_holder_pid)}` : ''}</div>`],
         ['Collector reporting', `${reporting}<div class="muted">${time(item.collector_updated_at)} / ${age(item.collector_updated_at)}</div>`],
         ['Secondary allowed', `${secondary}<div class="muted">API server config</div>`],
-        ['Last data', `${time(item.last_data_at)}<div class="muted">${age(item.last_data_at)}</div>`],
+        ['Last data', timeBlock(item.last_data_at)],
         ['Failures', escapeHTML(item.consecutive_failures ?? 0)],
         ['Last error', `<span class="mono-wrap">${escapeHTML(cell(item.last_error))}</span>`],
       ];
@@ -230,8 +240,8 @@
       const items = [
         ['Current version', escapeHTML(schema.current_version ?? 0)],
         ['Applied migrations', escapeHTML(schema.migrations?.length ?? 0)],
-        ['Latest migration', latest ? `<code>${escapeHTML(latest.version)} ${escapeHTML(latest.name)}</code>` : '-'],
-        ['Latest applied', latest ? `${time(latest.applied_at)}<div class="muted">${age(latest.applied_at)}</div>` : '-'],
+        ['Latest migration', latest ? summaryText(`<code>${escapeHTML(latest.version)} ${escapeHTML(latest.name)}</code>`) : '-'],
+        ['Latest applied', latest ? timeBlock(latest.applied_at) : '-'],
       ];
       document.querySelector('#schema').innerHTML = items.map(([label, value]) => (
         `<div class="summary-item"><div class="summary-label">${escapeHTML(label)}</div><div class="summary-value">${value}</div></div>`
