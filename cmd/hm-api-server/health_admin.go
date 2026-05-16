@@ -835,6 +835,23 @@ func (api *apiServer) handleHealthNotificationEvents(w http.ResponseWriter, r *h
 	writeJSON(w, http.StatusOK, items)
 }
 
+func (api *apiServer) handleDeleteHealthNotificationEvents(w http.ResponseWriter, r *http.Request) {
+	handleDeleteHealthNotificationEvents(w, r, func(ctx context.Context) error {
+		_, err := api.db.Exec(ctx, `
+			DELETE FROM health_notification_events
+		`)
+		return err
+	})
+}
+
+func handleDeleteHealthNotificationEvents(w http.ResponseWriter, r *http.Request, deleteEvents func(context.Context) error) {
+	if err := deleteEvents(r.Context()); err != nil {
+		writeError(w, http.StatusInternalServerError, "delete health notification events")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (api *apiServer) handleTestHealthWebhook(w http.ResponseWriter, r *http.Request) {
 	if api.adminWebhook == nil {
 		writeError(w, http.StatusServiceUnavailable, "admin webhook is not configured")

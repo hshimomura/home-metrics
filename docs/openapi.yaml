@@ -522,6 +522,17 @@ paths:
           $ref: '#/components/responses/Error'
         '500':
           $ref: '#/components/responses/Error'
+    delete:
+      operationId: deleteHealthNotificationEvents
+      summary: Clear backend health webhook delivery history
+      description: Deletes health_notification_events only. It does not delete health_alert_state or user notification_events.
+      responses:
+        '204':
+          description: Webhook delivery history cleared
+        '401':
+          $ref: '#/components/responses/Error'
+        '500':
+          $ref: '#/components/responses/Error'
   /api/ios/devices:
     get:
       operationId: listIOSDevices

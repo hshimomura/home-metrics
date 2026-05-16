@@ -409,6 +409,7 @@ GET    /api/admin/maintenance
 POST   /api/admin/maintenance
 DELETE /api/admin/maintenance/{alert_key}
 GET    /api/admin/health-notification-events
+DELETE /api/admin/health-notification-events
 POST   /api/admin/health-alerts/{alert_key}/test-webhook
 POST   /api/admin/devices/{mac}/maintenance
 GET    /api/devices
@@ -457,6 +458,9 @@ series API の対応 metric は `temperature_c`, `humidity_percent`, `battery_pe
 alert rule API の対応 operator は `>`, `>=`, `<`, `<=` です。`POST /api/alert-rules` と `PUT /api/alert-rules/{id}` は `mac`, `metric`, `operator`, `threshold` が必須です。`PUT` は部分更新ではなく full replace です。`enabled` を省略すると `true`、`cooldown_seconds` を省略すると `86400` 秒になります。
 
 notification events API は `limit`, `status`, `mac`, `alert_rule_id` query に対応しています。`limit` は 1 から 500、`status` は `pending`, `dry_run`, `sent`, `failed`, `skipped` に対応しています。
+backend health webhook delivery history は `GET /api/admin/health-notification-events` で最新 200 件を返します。
+`DELETE /api/admin/health-notification-events` は webhook delivery history だけを全削除し、
+`health_alert_state` や通常の user notification history (`notification_events`) は削除しません。
 
 energy latest API は `source`, `device_key` query で絞り込みできます。レスポンスは `[{ "ts":"...", "source":"echonet", "device_key":"...", "label":"EIBS7", "location":"...", "metric":"solar_generation_w", "value":1200, "unit":"W" }]` の配列です。現時点の metric は Nature Remo E の `measured_instantaneous_w`、ECHONET Lite の `solar_generation_w`, `battery_remaining`, `battery_power_w` です。
 
@@ -465,6 +469,8 @@ energy series API は `source`, `device_key`, `metric`, `range` query に対応�
 ## DB Maintenance
 
 `sensor_minute` から長期保存用テーブルを更新し、古い 1 分値を削除します。
+backend health webhook delivery history (`health_notification_events`) も削除対象で、
+`DB_MAINT_RETAIN_HEALTH_NOTIFICATION_EVENTS` の既定値は 7 日 (`168h`) です。
 
 energy 系は `db/energy_optimization.sql` で TimescaleDB continuous aggregate,
 1 day chunk interval, columnstore policy, 14 day raw retention policy を設定します。
@@ -474,6 +480,7 @@ APC UPS と ECHONET Lite は PostgreSQL 書き込み時に timestamp を 1 分�
 BLE_DB_DSN='dbname=ble_sensors host=/var/run/postgresql' \
 DB_MAINT_REFRESH_LOOKBACK=336h \
 DB_MAINT_RETAIN_MINUTE=336h \
+DB_MAINT_RETAIN_HEALTH_NOTIFICATION_EVENTS=168h \
 hm-db-maint
 ```
 

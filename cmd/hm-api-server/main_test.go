@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -162,5 +163,26 @@ func TestUnsupportedAPIEndpointReturnsJSONError(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), `"error":"unsupported endpoint"`) {
 		t.Fatalf("unexpected body: %s", rec.Body.String())
+	}
+}
+
+func TestDeleteHealthNotificationEventsReturnsNoContent(t *testing.T) {
+	req := httptest.NewRequest(http.MethodDelete, "/api/admin/health-notification-events", nil)
+	rec := httptest.NewRecorder()
+	called := false
+
+	handleDeleteHealthNotificationEvents(rec, req, func(context.Context) error {
+		called = true
+		return nil
+	})
+
+	if !called {
+		t.Fatal("delete function was not called")
+	}
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusNoContent)
+	}
+	if rec.Body.Len() != 0 {
+		t.Fatalf("body = %q, want empty", rec.Body.String())
 	}
 }

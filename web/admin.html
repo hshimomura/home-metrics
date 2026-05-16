@@ -77,6 +77,7 @@
       <div class="toolbar">
         <a href="/">Metrics</a>
         <input id="token" type="password" placeholder="API token">
+        <button id="clear-events">Clear history</button>
         <button id="refresh">Refresh</button>
       </div>
     </header>
@@ -127,6 +128,7 @@
     token.value = localStorage.getItem('ble_api_token') || '';
     token.addEventListener('change', () => localStorage.setItem('ble_api_token', token.value));
     document.querySelector('#refresh').addEventListener('click', load);
+    document.querySelector('#clear-events').addEventListener('click', clearWebhookHistory);
     window.addEventListener('hashchange', focusDeepLinkedAlert);
     document.querySelector('#alerts').addEventListener('click', async event => {
       const button = event.target.closest('button[data-test-alert], button[data-alert-action]');
@@ -200,7 +202,22 @@
     async function deleteJSON(path) {
       const res = await fetch(path, { method: 'DELETE', headers: headers() });
       if (!res.ok) throw new Error(`${path}: ${res.status}`);
+      if (res.status === 204) return null;
       return res.json();
+    }
+
+    async function clearWebhookHistory() {
+      if (!confirm('Clear all webhook delivery history? Current health alerts are not deleted.')) return;
+      statusLine.textContent = 'Clearing webhook delivery history';
+      statusLine.className = 'muted';
+      try {
+        await deleteJSON('/api/admin/health-notification-events');
+        statusLine.textContent = 'Webhook delivery history cleared';
+        await load();
+      } catch (err) {
+        statusLine.textContent = err.message;
+        statusLine.className = 'muted error';
+      }
     }
 
     function escapeHTML(value) {

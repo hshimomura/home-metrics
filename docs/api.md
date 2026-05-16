@@ -250,6 +250,12 @@ body は任意です。省略時は maintenance mode を有効にします。
 
 health alert の webhook 配送履歴を返します。
 
+### DELETE /api/admin/health-notification-events
+
+health alert の webhook 配送履歴 (`health_notification_events`) だけを全削除します。
+成功時は `204 No Content` です。`health_alert_state` と通常の user notification history
+(`notification_events`) は削除しません。
+
 ### POST /api/admin/health-alerts/{alert_key}/test-webhook
 
 指定した health alert を元に admin webhook の test payload を送信します。

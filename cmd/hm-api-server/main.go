@@ -270,6 +270,7 @@ func newRouter(api *apiServer) http.Handler {
 	mux.HandleFunc("POST /api/admin/maintenance", api.handleStartMaintenance)
 	mux.HandleFunc("DELETE /api/admin/maintenance/{alert_key}", api.handleEndMaintenance)
 	mux.HandleFunc("GET /api/admin/health-notification-events", api.handleHealthNotificationEvents)
+	mux.HandleFunc("DELETE /api/admin/health-notification-events", api.handleDeleteHealthNotificationEvents)
 	mux.HandleFunc("POST /api/admin/devices/{mac}/maintenance", api.handleDeviceMaintenance)
 	mux.HandleFunc("POST /api/admin/health-alerts/{alert_key}/test-webhook", api.handleTestHealthWebhook)
 	mux.HandleFunc("GET /api/devices", api.handleDevices)
