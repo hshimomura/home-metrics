@@ -16,6 +16,8 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const ciscoSpacesFirehoseLockKey int64 = 734829148912345
+
 type collectorStatusResponse struct {
 	CollectorName       string     `json:"collector_name"`
 	TargetType          string     `json:"target_type"`
@@ -31,18 +33,25 @@ type collectorStatusResponse struct {
 }
 
 type healthAlertResponse struct {
-	AlertKey        string            `json:"alert_key"`
-	Status          string            `json:"status"`
-	Severity        string            `json:"severity"`
-	Title           string            `json:"title"`
-	Source          string            `json:"source"`
-	Summary         string            `json:"summary"`
-	Labels          map[string]string `json:"labels"`
-	FirstFiredAt    *time.Time        `json:"first_fired_at,omitempty"`
-	LastEvaluatedAt time.Time         `json:"last_evaluated_at"`
-	LastNotifiedAt  *time.Time        `json:"last_notified_at,omitempty"`
-	ResolvedAt      *time.Time        `json:"resolved_at,omitempty"`
-	UpdatedAt       time.Time         `json:"updated_at"`
+	AlertKey           string            `json:"alert_key"`
+	Status             string            `json:"status"`
+	Severity           string            `json:"severity"`
+	Title              string            `json:"title"`
+	Source             string            `json:"source"`
+	Summary            string            `json:"summary"`
+	Labels             map[string]string `json:"labels"`
+	FirstFiredAt       *time.Time        `json:"first_fired_at,omitempty"`
+	LastEvaluatedAt    time.Time         `json:"last_evaluated_at"`
+	LastNotifiedAt     *time.Time        `json:"last_notified_at,omitempty"`
+	AcknowledgedAt     *time.Time        `json:"acknowledged_at,omitempty"`
+	AcknowledgedBy     string            `json:"acknowledged_by,omitempty"`
+	MutedUntil         *time.Time        `json:"muted_until,omitempty"`
+	MutedBy            string            `json:"muted_by,omitempty"`
+	MutedReason        string            `json:"muted_reason,omitempty"`
+	ManuallyResolvedAt *time.Time        `json:"manually_resolved_at,omitempty"`
+	ManuallyResolvedBy string            `json:"manually_resolved_by,omitempty"`
+	ResolvedAt         *time.Time        `json:"resolved_at,omitempty"`
+	UpdatedAt          time.Time         `json:"updated_at"`
 }
 
 type healthNotificationEventResponse struct {
@@ -74,6 +83,42 @@ type testHealthWebhookResponse struct {
 	HTTPStatus int    `json:"http_status,omitempty"`
 }
 
+type healthAlertOperationRequest struct {
+	Actor    string `json:"actor,omitempty"`
+	Duration string `json:"duration,omitempty"`
+	Reason   string `json:"reason,omitempty"`
+}
+
+type schemaMigrationResponse struct {
+	Version   int64     `json:"version"`
+	Name      string    `json:"name"`
+	Checksum  string    `json:"checksum"`
+	AppliedAt time.Time `json:"applied_at"`
+}
+
+type schemaResponse struct {
+	CurrentVersion int64                     `json:"current_version"`
+	Migrations     []schemaMigrationResponse `json:"migrations"`
+}
+
+type ciscoSpacesFirehoseStatusResponse struct {
+	LockKey                    int64      `json:"lock_key"`
+	LockHeld                   bool       `json:"lock_held"`
+	LockHolderPID              *int32     `json:"lock_holder_pid,omitempty"`
+	Mode                       string     `json:"mode"`
+	ConfiguredSecondaryAllowed bool       `json:"configured_secondary_allowed"`
+	CollectorStatusPresent     bool       `json:"collector_status_present"`
+	CollectorReporting         bool       `json:"collector_reporting"`
+	CollectorUpdatedAt         *time.Time `json:"collector_updated_at,omitempty"`
+	LastAttemptAt              *time.Time `json:"last_attempt_at,omitempty"`
+	LastSuccessAt              *time.Time `json:"last_success_at,omitempty"`
+	LastDataAt                 *time.Time `json:"last_data_at,omitempty"`
+	FirstFailureAt             *time.Time `json:"first_failure_at,omitempty"`
+	LastFailureAt              *time.Time `json:"last_failure_at,omitempty"`
+	ConsecutiveFailures        int        `json:"consecutive_failures"`
+	LastError                  string     `json:"last_error,omitempty"`
+}
+
 func (api *apiServer) handleHealthDetails(w http.ResponseWriter, r *http.Request) {
 	if err := api.db.Ping(r.Context()); err != nil {
 		writeError(w, http.StatusServiceUnavailable, "database unavailable")
@@ -96,6 +141,118 @@ func (api *apiServer) handleHealthDetails(w http.ResponseWriter, r *http.Request
 	}
 	if res.StaleCollectors > 0 || res.ActiveHealthAlerts > 0 || res.FailedDeliveries24h > 0 {
 		res.Status = "degraded"
+	}
+	writeJSON(w, http.StatusOK, res)
+}
+
+func (api *apiServer) handleSchema(w http.ResponseWriter, r *http.Request) {
+	rows, err := api.db.Query(r.Context(), `
+		SELECT version, name, checksum, applied_at
+		FROM schema_migrations
+		ORDER BY version
+	`)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "query schema migrations")
+		return
+	}
+	defer rows.Close()
+
+	res := schemaResponse{Migrations: []schemaMigrationResponse{}}
+	for rows.Next() {
+		var item schemaMigrationResponse
+		if err := rows.Scan(&item.Version, &item.Name, &item.Checksum, &item.AppliedAt); err != nil {
+			writeError(w, http.StatusInternalServerError, "scan schema migration")
+			return
+		}
+		if item.Version > res.CurrentVersion {
+			res.CurrentVersion = item.Version
+		}
+		res.Migrations = append(res.Migrations, item)
+	}
+	if err := rows.Err(); err != nil {
+		writeError(w, http.StatusInternalServerError, "read schema migrations")
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
+}
+
+func (api *apiServer) handleCiscoSpacesFirehoseStatus(w http.ResponseWriter, r *http.Request) {
+	res := ciscoSpacesFirehoseStatusResponse{
+		LockKey:                    ciscoSpacesFirehoseLockKey,
+		ConfiguredSecondaryAllowed: envBool("CISCO_SPACES_ALLOW_SECONDARY", false),
+	}
+	classID, objID := advisoryLockParts(ciscoSpacesFirehoseLockKey)
+	var pid pgtype.Int4
+	err := api.db.QueryRow(r.Context(), `
+		SELECT pid
+		FROM pg_locks
+		WHERE locktype = 'advisory'
+		  AND mode = 'ExclusiveLock'
+		  AND granted
+		  AND classid::bigint = $1
+		  AND objid::bigint = $2
+		  AND objsubid = 1
+		LIMIT 1
+	`, classID, objID).Scan(&pid)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		writeError(w, http.StatusInternalServerError, "query Cisco Spaces advisory lock")
+		return
+	}
+	if pid.Valid {
+		res.LockHeld = true
+		res.LockHolderPID = &pid.Int32
+	}
+
+	var lastAttemptAt, lastSuccessAt, lastDataAt, firstFailureAt, lastFailureAt pgtype.Timestamptz
+	var updatedAt pgtype.Timestamptz
+	err = api.db.QueryRow(r.Context(), `
+		SELECT
+			last_attempt_at,
+			last_success_at,
+			last_data_at,
+			first_failure_at,
+			last_failure_at,
+			COALESCE(last_error, ''),
+			consecutive_failures,
+			updated_at
+		FROM collector_status
+		WHERE collector_name = 'hm-cisco-spaces-collector'
+		  AND target_type = 'cisco_spaces_firehose'
+		  AND target_key = 'default'
+	`).Scan(
+		&lastAttemptAt,
+		&lastSuccessAt,
+		&lastDataAt,
+		&firstFailureAt,
+		&lastFailureAt,
+		&res.LastError,
+		&res.ConsecutiveFailures,
+		&updatedAt,
+	)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		writeError(w, http.StatusInternalServerError, "query Cisco Spaces collector status")
+		return
+	}
+	if err == nil {
+		res.CollectorStatusPresent = true
+		res.LastAttemptAt = timePtrFromPg(lastAttemptAt)
+		res.LastSuccessAt = timePtrFromPg(lastSuccessAt)
+		res.LastDataAt = timePtrFromPg(lastDataAt)
+		res.FirstFailureAt = timePtrFromPg(firstFailureAt)
+		res.LastFailureAt = timePtrFromPg(lastFailureAt)
+		res.CollectorUpdatedAt = timePtrFromPg(updatedAt)
+		if res.CollectorUpdatedAt != nil {
+			window := envDuration("HEALTH_CISCO_SPACES_HEARTBEAT_WARNING_AFTER", envDuration("HEALTH_COLLECTOR_HEARTBEAT_WARNING_AFTER", 5*time.Minute))
+			res.CollectorReporting = time.Since(*res.CollectorUpdatedAt) < window
+		}
+	}
+	res.Mode = "not-running"
+	if res.LockHeld {
+		res.Mode = "primary-lock-held"
+	} else if res.CollectorReporting {
+		res.Mode = "secondary-or-unlocked-reporting"
+	} else if res.ConfiguredSecondaryAllowed {
+		res.Mode = "secondary-allowed-idle"
 	}
 	writeJSON(w, http.StatusOK, res)
 }
@@ -171,6 +328,13 @@ func (api *apiServer) handleHealthAlerts(w http.ResponseWriter, r *http.Request)
 			first_fired_at,
 			last_evaluated_at,
 			last_notified_at,
+			acknowledged_at,
+			COALESCE(acknowledged_by, ''),
+			muted_until,
+			COALESCE(muted_by, ''),
+			COALESCE(muted_reason, ''),
+			manually_resolved_at,
+			COALESCE(manually_resolved_by, ''),
 			resolved_at,
 			updated_at
 		FROM health_alert_state
@@ -206,6 +370,105 @@ func (api *apiServer) handleHealthAlerts(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	writeJSON(w, http.StatusOK, items)
+}
+
+func (api *apiServer) handleAckHealthAlert(w http.ResponseWriter, r *http.Request) {
+	alertKey := strings.TrimSpace(r.PathValue("alert_key"))
+	if alertKey == "" {
+		writeError(w, http.StatusNotFound, "health alert not found")
+		return
+	}
+	req, ok := decodeHealthAlertOperationRequest(w, r)
+	if !ok {
+		return
+	}
+	actor := healthAlertActor(req.Actor)
+	tag, err := api.db.Exec(r.Context(), `
+		UPDATE health_alert_state
+		SET acknowledged_at = now(),
+			acknowledged_by = $2,
+			updated_at = now()
+		WHERE alert_key = $1
+	`, alertKey, actor)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "ack health alert")
+		return
+	}
+	if tag.RowsAffected() == 0 {
+		writeError(w, http.StatusNotFound, "health alert not found")
+		return
+	}
+	api.writeHealthAlert(w, r, alertKey)
+}
+
+func (api *apiServer) handleMuteHealthAlert(w http.ResponseWriter, r *http.Request) {
+	alertKey := strings.TrimSpace(r.PathValue("alert_key"))
+	if alertKey == "" {
+		writeError(w, http.StatusNotFound, "health alert not found")
+		return
+	}
+	req, ok := decodeHealthAlertOperationRequest(w, r)
+	if !ok {
+		return
+	}
+	duration := time.Hour
+	if strings.TrimSpace(req.Duration) != "" {
+		parsed, err := time.ParseDuration(strings.TrimSpace(req.Duration))
+		if err != nil || parsed <= 0 {
+			writeError(w, http.StatusBadRequest, "invalid mute duration")
+			return
+		}
+		duration = parsed
+	}
+	mutedUntil := time.Now().Add(duration)
+	tag, err := api.db.Exec(r.Context(), `
+		UPDATE health_alert_state
+		SET muted_until = $2,
+			muted_by = $3,
+			muted_reason = NULLIF($4, ''),
+			updated_at = now()
+		WHERE alert_key = $1
+	`, alertKey, mutedUntil, healthAlertActor(req.Actor), strings.TrimSpace(req.Reason))
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "mute health alert")
+		return
+	}
+	if tag.RowsAffected() == 0 {
+		writeError(w, http.StatusNotFound, "health alert not found")
+		return
+	}
+	api.writeHealthAlert(w, r, alertKey)
+}
+
+func (api *apiServer) handleResolveHealthAlert(w http.ResponseWriter, r *http.Request) {
+	alertKey := strings.TrimSpace(r.PathValue("alert_key"))
+	if alertKey == "" {
+		writeError(w, http.StatusNotFound, "health alert not found")
+		return
+	}
+	req, ok := decodeHealthAlertOperationRequest(w, r)
+	if !ok {
+		return
+	}
+	tag, err := api.db.Exec(r.Context(), `
+		UPDATE health_alert_state
+		SET status = 'resolved',
+			severity = 'info',
+			resolved_at = now(),
+			manually_resolved_at = now(),
+			manually_resolved_by = $2,
+			updated_at = now()
+		WHERE alert_key = $1
+	`, alertKey, healthAlertActor(req.Actor))
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "resolve health alert")
+		return
+	}
+	if tag.RowsAffected() == 0 {
+		writeError(w, http.StatusNotFound, "health alert not found")
+		return
+	}
+	api.writeHealthAlert(w, r, alertKey)
 }
 
 func (api *apiServer) handleHealthNotificationEvents(w http.ResponseWriter, r *http.Request) {
@@ -316,6 +579,13 @@ func (api *apiServer) loadHealthAlert(ctx context.Context, key string) (healthAl
 			first_fired_at,
 			last_evaluated_at,
 			last_notified_at,
+			acknowledged_at,
+			COALESCE(acknowledged_by, ''),
+			muted_until,
+			COALESCE(muted_by, ''),
+			COALESCE(muted_reason, ''),
+			manually_resolved_at,
+			COALESCE(manually_resolved_by, ''),
 			resolved_at,
 			updated_at
 		FROM health_alert_state
@@ -327,7 +597,7 @@ func (api *apiServer) loadHealthAlert(ctx context.Context, key string) (healthAl
 func scanHealthAlert(row scanner) (healthAlertResponse, error) {
 	var item healthAlertResponse
 	var labels []byte
-	var firstFiredAt, lastNotifiedAt, resolvedAt pgtype.Timestamptz
+	var firstFiredAt, lastNotifiedAt, acknowledgedAt, mutedUntil, manuallyResolvedAt, resolvedAt pgtype.Timestamptz
 	if err := row.Scan(
 		&item.AlertKey,
 		&item.Status,
@@ -339,6 +609,13 @@ func scanHealthAlert(row scanner) (healthAlertResponse, error) {
 		&firstFiredAt,
 		&item.LastEvaluatedAt,
 		&lastNotifiedAt,
+		&acknowledgedAt,
+		&item.AcknowledgedBy,
+		&mutedUntil,
+		&item.MutedBy,
+		&item.MutedReason,
+		&manuallyResolvedAt,
+		&item.ManuallyResolvedBy,
 		&resolvedAt,
 		&item.UpdatedAt,
 	); err != nil {
@@ -352,8 +629,52 @@ func scanHealthAlert(row scanner) (healthAlertResponse, error) {
 	}
 	item.FirstFiredAt = timePtrFromPg(firstFiredAt)
 	item.LastNotifiedAt = timePtrFromPg(lastNotifiedAt)
+	item.AcknowledgedAt = timePtrFromPg(acknowledgedAt)
+	item.MutedUntil = timePtrFromPg(mutedUntil)
+	item.ManuallyResolvedAt = timePtrFromPg(manuallyResolvedAt)
 	item.ResolvedAt = timePtrFromPg(resolvedAt)
 	return item, nil
+}
+
+func (api *apiServer) writeHealthAlert(w http.ResponseWriter, r *http.Request, alertKey string) {
+	alert, err := api.loadHealthAlert(r.Context(), alertKey)
+	if errors.Is(err, pgx.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "health alert not found")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "query health alert")
+		return
+	}
+	writeJSON(w, http.StatusOK, alert)
+}
+
+func decodeHealthAlertOperationRequest(w http.ResponseWriter, r *http.Request) (healthAlertOperationRequest, bool) {
+	var req healthAlertOperationRequest
+	if r.Body == nil || r.ContentLength == 0 {
+		return req, true
+	}
+	defer r.Body.Close()
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return healthAlertOperationRequest{}, false
+	}
+	return req, true
+}
+
+func healthAlertActor(actor string) string {
+	actor = strings.TrimSpace(actor)
+	if actor == "" {
+		return "admin-api"
+	}
+	return actor
+}
+
+func advisoryLockParts(key int64) (int64, int64) {
+	value := uint64(key)
+	return int64(uint32(value >> 32)), int64(uint32(value))
 }
 
 func timePtrFromPg(value pgtype.Timestamptz) *time.Time {

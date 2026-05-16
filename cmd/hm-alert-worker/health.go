@@ -74,6 +74,7 @@ type healthState struct {
 	Severity       string
 	FirstFiredAt   *time.Time
 	LastNotifiedAt *time.Time
+	MutedUntil     *time.Time
 }
 
 type healthNotificationResult struct {
@@ -647,17 +648,20 @@ func applyHealthAlert(ctx context.Context, db *pgx.Conn, notifier healthNotifier
 
 func loadHealthState(ctx context.Context, db *pgx.Conn, key string) (healthState, error) {
 	var state healthState
-	var firstFiredAt, lastNotifiedAt pgtype.Timestamptz
+	var firstFiredAt, lastNotifiedAt, mutedUntil pgtype.Timestamptz
 	err := db.QueryRow(ctx, `
-		SELECT status, severity, first_fired_at, last_notified_at
+		SELECT status, severity, first_fired_at, last_notified_at, muted_until
 		FROM health_alert_state
 		WHERE alert_key = $1
-	`, key).Scan(&state.Status, &state.Severity, &firstFiredAt, &lastNotifiedAt)
+	`, key).Scan(&state.Status, &state.Severity, &firstFiredAt, &lastNotifiedAt, &mutedUntil)
 	if firstFiredAt.Valid {
 		state.FirstFiredAt = &firstFiredAt.Time
 	}
 	if lastNotifiedAt.Valid {
 		state.LastNotifiedAt = &lastNotifiedAt.Time
+	}
+	if mutedUntil.Valid {
+		state.MutedUntil = &mutedUntil.Time
 	}
 	return state, err
 }
@@ -715,6 +719,9 @@ func upsertHealthState(ctx context.Context, db *pgx.Conn, alert healthAlert, pre
 }
 
 func shouldNotifyHealthAlert(previous healthState, existed bool, alert healthAlert, cfg healthConfig, now time.Time) bool {
+	if previous.MutedUntil != nil && now.Before(*previous.MutedUntil) {
+		return false
+	}
 	if alert.Status == healthStatusResolved {
 		return existed && previous.Status == healthStatusFiring && previous.LastNotifiedAt != nil
 	}

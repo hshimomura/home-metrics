@@ -49,6 +49,13 @@ func TestShouldNotifyHealthAlert(t *testing.T) {
 	if shouldNotifyHealthAlert(healthState{Status: healthStatusFiring, Severity: "warning"}, true, resolved, cfg, now) {
 		t.Fatal("resolved alert without prior notification should not notify")
 	}
+	mutedUntil := now.Add(30 * time.Minute)
+	if shouldNotifyHealthAlert(healthState{Status: healthStatusFiring, Severity: "critical", LastNotifiedAt: &recent, MutedUntil: &mutedUntil}, true, alert, cfg, now) {
+		t.Fatal("muted firing alert should not notify")
+	}
+	if shouldNotifyHealthAlert(healthState{Status: healthStatusFiring, Severity: "critical", LastNotifiedAt: &recent, MutedUntil: &mutedUntil}, true, resolved, cfg, now) {
+		t.Fatal("muted recovery alert should not notify")
+	}
 }
 
 func TestFailedHealthDeliveryDoesNotCountAsNotified(t *testing.T) {

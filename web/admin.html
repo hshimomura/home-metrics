@@ -24,6 +24,7 @@
     button:hover { background: #eef1f4; }
     button:disabled { cursor: wait; opacity: 0.65; }
     .toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+    .actions { display: flex; flex-wrap: wrap; gap: 6px; }
     .summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px; }
     .summary-item { border: 1px solid #d9dee3; background: #fff; padding: 12px; }
     .summary-label { color: #5f6b76; font-size: 12px; }
@@ -74,6 +75,16 @@
     </section>
 
     <section>
+      <h2>Cisco Spaces Firehose</h2>
+      <div class="summary" id="cisco-firehose"></div>
+    </section>
+
+    <section>
+      <h2>Schema</h2>
+      <div class="summary" id="schema"></div>
+    </section>
+
+    <section>
       <h2>Collector Status</h2>
       <table>
         <thead><tr><th>Collector</th><th>Target</th><th>Last Attempt</th><th>Last Success</th><th>Last Data</th><th>First Failure</th><th>Last Failure</th><th>Failures</th><th>Last Error</th></tr></thead>
@@ -84,7 +95,7 @@
     <section>
       <h2>Health Alerts</h2>
       <table>
-        <thead><tr><th>Status</th><th>Severity</th><th>Title</th><th>Source</th><th>Summary</th><th>Updated</th><th>Last Notified</th><th>Action</th></tr></thead>
+        <thead><tr><th>Status</th><th>Severity</th><th>Title</th><th>Source</th><th>Summary</th><th>Updated</th><th>Last Notified</th><th>State</th><th>Action</th></tr></thead>
         <tbody id="alerts"></tbody>
       </table>
     </section>
@@ -106,14 +117,22 @@
     document.querySelector('#refresh').addEventListener('click', load);
     window.addEventListener('hashchange', focusDeepLinkedAlert);
     document.querySelector('#alerts').addEventListener('click', async event => {
-      const button = event.target.closest('button[data-test-alert]');
+      const button = event.target.closest('button[data-test-alert], button[data-alert-action]');
       if (!button) return;
       button.disabled = true;
-      statusLine.textContent = 'Sending test webhook';
+      statusLine.textContent = 'Running admin action';
       statusLine.className = 'muted';
       try {
-        const result = await postJSON(`/api/admin/health-alerts/${encodeURIComponent(button.dataset.testAlert)}/test-webhook`);
-        statusLine.textContent = `Test webhook ${result.status}: ${result.event_id}`;
+        if (button.dataset.testAlert) {
+          const result = await postJSON(`/api/admin/health-alerts/${encodeURIComponent(button.dataset.testAlert)}/test-webhook`);
+          statusLine.textContent = `Test webhook ${result.status}: ${result.event_id}`;
+        } else {
+          const action = button.dataset.alertAction;
+          const alertKey = button.dataset.alertKey;
+          const body = action === 'mute' ? { duration: '1h', reason: 'muted from /admin' } : {};
+          await postJSON(`/api/admin/health-alerts/${encodeURIComponent(alertKey)}/${action}`, body);
+          statusLine.textContent = `Alert ${action} completed`;
+        }
         await load();
       } catch (err) {
         statusLine.textContent = err.message;
@@ -133,7 +152,13 @@
     }
 
     async function postJSON(path) {
-      const res = await fetch(path, { method: 'POST', headers: headers() });
+      const requestHeaders = headers();
+      let body;
+      if (arguments.length > 1) {
+        requestHeaders['Content-Type'] = 'application/json';
+        body = JSON.stringify(arguments[1]);
+      }
+      const res = await fetch(path, { method: 'POST', headers: requestHeaders, body });
       if (!res.ok) throw new Error(`${path}: ${res.status}`);
       return res.json();
     }
@@ -182,6 +207,37 @@
       )).join('');
     }
 
+    function renderCiscoFirehose(item) {
+      const lock = item.lock_held ? pill('ok') : pill(item.collector_status_present || item.configured_secondary_allowed ? 'warning' : 'disabled');
+      const reporting = item.collector_reporting ? pill('ok') : pill(item.collector_status_present ? 'warning' : 'disabled');
+      const secondary = item.configured_secondary_allowed ? pill('warning') : pill('ok');
+      const items = [
+        ['Mode', `<code>${escapeHTML(item.mode)}</code>`],
+        ['Advisory lock', `${lock}<div class="muted">key ${escapeHTML(item.lock_key)}${item.lock_holder_pid ? ` / pid ${escapeHTML(item.lock_holder_pid)}` : ''}</div>`],
+        ['Collector reporting', `${reporting}<div class="muted">${time(item.collector_updated_at)} / ${age(item.collector_updated_at)}</div>`],
+        ['Secondary allowed', `${secondary}<div class="muted">API server config</div>`],
+        ['Last data', `${time(item.last_data_at)}<div class="muted">${age(item.last_data_at)}</div>`],
+        ['Failures', escapeHTML(item.consecutive_failures ?? 0)],
+        ['Last error', `<span class="mono-wrap">${escapeHTML(cell(item.last_error))}</span>`],
+      ];
+      document.querySelector('#cisco-firehose').innerHTML = items.map(([label, value]) => (
+        `<div class="summary-item"><div class="summary-label">${escapeHTML(label)}</div><div class="summary-value">${value}</div></div>`
+      )).join('');
+    }
+
+    function renderSchema(schema) {
+      const latest = schema.migrations?.length ? schema.migrations[schema.migrations.length - 1] : null;
+      const items = [
+        ['Current version', escapeHTML(schema.current_version ?? 0)],
+        ['Applied migrations', escapeHTML(schema.migrations?.length ?? 0)],
+        ['Latest migration', latest ? `<code>${escapeHTML(latest.version)} ${escapeHTML(latest.name)}</code>` : '-'],
+        ['Latest applied', latest ? `${time(latest.applied_at)}<div class="muted">${age(latest.applied_at)}</div>` : '-'],
+      ];
+      document.querySelector('#schema').innerHTML = items.map(([label, value]) => (
+        `<div class="summary-item"><div class="summary-label">${escapeHTML(label)}</div><div class="summary-value">${value}</div></div>`
+      )).join('');
+    }
+
     function renderCollectors(items) {
       document.querySelector('#collectors').innerHTML = items.map(item => `
         <tr>
@@ -208,10 +264,32 @@
           <td>${escapeHTML(item.summary)}</td>
           <td>${time(item.updated_at)}<div class="muted">${age(item.updated_at)}</div></td>
           <td>${time(item.last_notified_at)}</td>
-          <td><button data-test-alert="${escapeHTML(item.alert_key)}">Test webhook</button></td>
+          <td>${renderAlertState(item)}</td>
+          <td>
+            <div class="actions">
+              <button data-alert-action="ack" data-alert-key="${escapeHTML(item.alert_key)}">Ack</button>
+              <button data-alert-action="mute" data-alert-key="${escapeHTML(item.alert_key)}">Mute 1h</button>
+              <button data-alert-action="resolve" data-alert-key="${escapeHTML(item.alert_key)}">Resolve</button>
+              <button data-test-alert="${escapeHTML(item.alert_key)}">Test webhook</button>
+            </div>
+          </td>
         </tr>
-      `).join('') || '<tr><td colspan="8" class="muted">No health alerts.</td></tr>';
+      `).join('') || '<tr><td colspan="9" class="muted">No health alerts.</td></tr>';
       focusDeepLinkedAlert();
+    }
+
+    function renderAlertState(item) {
+      const parts = [];
+      if (item.acknowledged_at) {
+        parts.push(`Ack: ${time(item.acknowledged_at)}${item.acknowledged_by ? ` by ${escapeHTML(item.acknowledged_by)}` : ''}`);
+      }
+      if (item.muted_until) {
+        parts.push(`Muted until: ${time(item.muted_until)}${item.muted_by ? ` by ${escapeHTML(item.muted_by)}` : ''}`);
+      }
+      if (item.manually_resolved_at) {
+        parts.push(`Manual resolve: ${time(item.manually_resolved_at)}${item.manually_resolved_by ? ` by ${escapeHTML(item.manually_resolved_by)}` : ''}`);
+      }
+      return parts.length ? parts.map(part => `<div class="muted">${part}</div>`).join('') : '-';
     }
 
     function renderEvents(items) {
@@ -231,13 +309,17 @@
       statusLine.textContent = 'Loading';
       statusLine.className = 'muted';
       try {
-        const [summary, collectors, alerts, events] = await Promise.all([
+        const [summary, cisco, schema, collectors, alerts, events] = await Promise.all([
           getJSON('/api/health/details'),
+          getJSON('/api/admin/cisco-spaces-firehose'),
+          getJSON('/api/admin/schema'),
           getJSON('/api/admin/collector-status'),
           getJSON('/api/admin/health-alerts'),
           getJSON('/api/admin/health-notification-events'),
         ]);
         renderSummary(summary);
+        renderCiscoFirehose(cisco);
+        renderSchema(schema);
         renderCollectors(collectors);
         renderAlerts(alerts);
         renderEvents(events);

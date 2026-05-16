@@ -202,6 +202,13 @@ CREATE TABLE IF NOT EXISTS health_alert_state (
     first_fired_at timestamptz,
     last_evaluated_at timestamptz NOT NULL,
     last_notified_at timestamptz,
+    acknowledged_at timestamptz,
+    acknowledged_by text,
+    muted_until timestamptz,
+    muted_by text,
+    muted_reason text,
+    manually_resolved_at timestamptz,
+    manually_resolved_by text,
     resolved_at timestamptz,
     updated_at timestamptz NOT NULL DEFAULT now()
 );
