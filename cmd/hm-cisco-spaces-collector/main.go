@@ -37,7 +37,6 @@ const (
 	defaultReconnectMaxDelay = time.Minute
 	defaultStreamHeartbeat   = time.Minute
 	ciscoSpacesLockKey       = int64(734829148912345)
-	processorVersion         = "hm-cisco-spaces-collector/raw-v1"
 )
 
 type config struct {
@@ -180,11 +179,6 @@ type statusReporter struct {
 	target collectorstatus.Target
 }
 
-type rawEventRef struct {
-	ReceivedAt time.Time
-	ID         int64
-}
-
 type rawEventMetadata struct {
 	RecordUID     string
 	RecordTS      *time.Time
@@ -292,27 +286,23 @@ func main() {
 	}, func() {
 		reporter.MarkSuccess(ctx)
 	}, func(event firehoseEvent, raw []byte) {
-		var rawRef *rawEventRef
 		if !cfg.DryRun {
 			dbMu.Lock()
-			ref, err := insertCiscoSpacesRawEvent(ctx, db, event, raw)
+			err := insertCiscoSpacesRawEvent(ctx, db, event, raw)
 			dbMu.Unlock()
 			if err != nil {
 				log.Printf("store Cisco Spaces raw event: %v", err)
 				reporter.MarkFailure(ctx, err)
 				return
 			}
-			rawRef = &ref
 		}
 
-		reading, ok, ignoreReason, err := p.processEvent(event)
+		reading, ok, _, err := p.processEvent(event)
 		if err != nil {
 			log.Printf("process Cisco Spaces event: %v", err)
-			markRawProcessing(ctx, dbMu, db, rawRef, "failed", err.Error(), nil)
 			return
 		}
 		if !ok {
-			markRawProcessing(ctx, dbMu, db, rawRef, "ignored", ignoreReason, nil)
 			return
 		}
 		if cfg.DryRun {
@@ -324,11 +314,9 @@ func main() {
 		dbMu.Unlock()
 		if err != nil {
 			log.Printf("write Cisco Spaces reading mac=%s ts=%s: %v", reading.MAC, reading.TS.Format(time.RFC3339), err)
-			markRawProcessing(ctx, dbMu, db, rawRef, "failed", err.Error(), &reading)
 			reporter.MarkFailure(ctx, err)
 			return
 		}
-		markRawProcessing(ctx, dbMu, db, rawRef, "processed", "", &reading)
 		reporter.MarkDataSuccess(ctx)
 		log.Printf("stored Cisco Spaces reading mac=%s ts=%s", reading.MAC, reading.TS.Format(time.RFC3339))
 	})
@@ -634,10 +622,9 @@ func (p *processor) fresh(fields map[metric]recentMetric, name metric, now time.
 	return floatPtr(field.Value)
 }
 
-func insertCiscoSpacesRawEvent(ctx context.Context, db *pgx.Conn, event firehoseEvent, raw []byte) (rawEventRef, error) {
+func insertCiscoSpacesRawEvent(ctx context.Context, db *pgx.Conn, event firehoseEvent, raw []byte) error {
 	meta := extractRawEventMetadata(event, raw)
-	var ref rawEventRef
-	err := db.QueryRow(ctx, `
+	_, err := db.Exec(ctx, `
 		INSERT INTO cisco_spaces_raw_events (
 			record_uid,
 			record_timestamp,
@@ -651,7 +638,6 @@ func insertCiscoSpacesRawEvent(ctx context.Context, db *pgx.Conn, event firehose
 			payload_sha256
 		)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10)
-		RETURNING received_at, id
 	`, nullableString(meta.RecordUID, meta.RecordUID != ""),
 		meta.RecordTS,
 		nullableString(meta.EventType, meta.EventType != ""),
@@ -662,8 +648,8 @@ func insertCiscoSpacesRawEvent(ctx context.Context, db *pgx.Conn, event firehose
 		nullableString(meta.MapID, meta.MapID != ""),
 		string(raw),
 		meta.PayloadSHA256,
-	).Scan(&ref.ReceivedAt, &ref.ID)
-	return ref, err
+	)
+	return err
 }
 
 func extractRawEventMetadata(event firehoseEvent, raw []byte) rawEventMetadata {
@@ -690,56 +676,6 @@ func extractRawEventMetadata(event firehoseEvent, raw []byte) rawEventMetadata {
 		meta.MapID = strings.TrimSpace(event.IOTTelemetry.DetectedPosition.MapID)
 	}
 	return meta
-}
-
-func markRawProcessing(ctx context.Context, mu *sync.Mutex, db *pgx.Conn, ref *rawEventRef, status string, reason string, reading *sensorReading) {
-	if db == nil || ref == nil {
-		return
-	}
-	mu.Lock()
-	defer mu.Unlock()
-	if err := updateCiscoSpacesRawEventProcessing(ctx, db, *ref, status, reason, reading); err != nil {
-		log.Printf("update Cisco Spaces raw event status=%s raw_id=%d: %v", status, ref.ID, err)
-	}
-}
-
-func updateCiscoSpacesRawEventProcessing(ctx context.Context, db *pgx.Conn, ref rawEventRef, status string, reason string, reading *sensorReading) error {
-	processError := ""
-	if status == "failed" {
-		processError = reason
-	}
-	if _, err := db.Exec(ctx, `
-		UPDATE cisco_spaces_raw_events
-		SET process_status = $3,
-			processed_at = now(),
-			process_error = NULLIF($4, ''),
-			processor_version = $5
-		WHERE received_at = $1
-			AND id = $2
-	`, ref.ReceivedAt, ref.ID, status, processError, processorVersion); err != nil {
-		return err
-	}
-
-	var outputTS any
-	var outputMAC any
-	if reading != nil {
-		outputTS = reading.TS
-		outputMAC = reading.MAC
-	}
-	_, err := db.Exec(ctx, `
-		INSERT INTO cisco_spaces_processing_events (
-			raw_received_at,
-			raw_id,
-			output_ts,
-			output_mac,
-			output_table,
-			processor_version,
-			status,
-			reason
-		)
-		VALUES ($1, $2, $3, $4, 'sensor_minute', $5, $6, NULLIF($7, ''))
-	`, ref.ReceivedAt, ref.ID, outputTS, outputMAC, processorVersion, status, reason)
-	return err
 }
 
 func writeReading(ctx context.Context, db *pgx.Conn, reading sensorReading) error {

@@ -397,64 +397,6 @@ paths:
           $ref: '#/components/responses/Error'
         '500':
           $ref: '#/components/responses/Error'
-  /api/admin/maintenance:
-    get:
-      operationId: listMaintenanceTargets
-      summary: List active health maintenance targets
-      responses:
-        '200':
-          description: Active maintenance targets
-          content:
-            application/json:
-              schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/MaintenanceTarget'
-        '401':
-          $ref: '#/components/responses/Error'
-        '500':
-          $ref: '#/components/responses/Error'
-    post:
-      operationId: startMaintenance
-      summary: Start maintenance mode for a health alert target
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/MaintenanceRequest'
-      responses:
-        '200':
-          description: Maintenance target
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/MaintenanceTarget'
-        '400':
-          $ref: '#/components/responses/Error'
-        '401':
-          $ref: '#/components/responses/Error'
-        '500':
-          $ref: '#/components/responses/Error'
-  /api/admin/maintenance/{alert_key}:
-    delete:
-      operationId: endMaintenance
-      summary: End maintenance mode for a health alert target
-      parameters:
-        - $ref: '#/components/parameters/AlertKeyPath'
-      responses:
-        '200':
-          description: Ended maintenance target
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/MaintenanceTarget'
-        '401':
-          $ref: '#/components/responses/Error'
-        '404':
-          $ref: '#/components/responses/Error'
-        '500':
-          $ref: '#/components/responses/Error'
   /api/admin/devices/{mac}/maintenance:
     post:
       operationId: setDeviceMaintenance
@@ -928,59 +870,14 @@ components:
         resolved_at:
           type: string
           format: date-time
-        maintenance:
-          $ref: '#/components/schemas/MaintenanceTarget'
         updated_at:
           type: string
           format: date-time
-    MaintenanceTarget:
-      type: object
-      required: [alert_key, target_kind, target_label, started_at, updated_at]
-      properties:
-        alert_key:
-          type: string
-        target_kind:
-          type: string
-        target_label:
-          type: string
-        reason:
-          type: string
-        started_at:
-          type: string
-          format: date-time
-        ends_at:
-          type: string
-          format: date-time
-        created_by:
-          type: string
-        updated_at:
-          type: string
-          format: date-time
-    MaintenanceRequest:
-      type: object
-      required: [alert_key]
-      properties:
-        alert_key:
-          type: string
-        target_kind:
-          type: string
-        target_label:
-          type: string
-        duration:
-          type: string
-          description: Empty for indefinite maintenance, or a Go duration such as 1h or 24h.
-        reason:
-          type: string
-        actor:
-          type: string
     HealthAlertOperationRequest:
       type: object
       properties:
         actor:
           type: string
-        duration:
-          type: string
-          example: 1h
         reason:
           type: string
         maintenance_mode:

@@ -405,9 +405,6 @@ GET    /api/admin/schema
 GET    /api/admin/cisco-spaces-firehose
 GET    /api/admin/collector-status
 GET    /api/admin/health-alerts
-GET    /api/admin/maintenance
-POST   /api/admin/maintenance
-DELETE /api/admin/maintenance/{alert_key}
 GET    /api/admin/health-notification-events
 DELETE /api/admin/health-notification-events
 POST   /api/admin/health-alerts/{alert_key}/test-webhook
@@ -430,26 +427,17 @@ DELETE /api/ios/devices/{id}
 
 全 API は JSON を返します。エラー時の body は `{"error":"message"}` です。認証は `Authorization: Bearer <API_TOKEN>` を基本とし、`X-API-Token: <API_TOKEN>` も受け付けます。
 
-`POST /api/admin/maintenance` は health alert target 単位で maintenance mode を開始します。
-sensor、collector、energy metric のいずれにも使えます。maintenance mode は underlying issue を
-resolved にせず、対象の health alert / webhook 通知だけを抑止します。`DELETE
-/api/admin/maintenance/{alert_key}` で終了すると、次回評価から現在状態に応じて通知が再開します。
-`duration` を省略すると、明示的に終了するまで継続します。
+`POST /api/admin/devices/{mac}/maintenance` は sensor device を maintenance mode に入れる、
+または解除します。maintenance mode は sensor freshness alert の評価対象から外すための
+運用状態で、collector alert や energy alert には使いません。`/admin` の Health Alerts では
+sensor alert の行だけに maintenance toggle を表示します。メンテ中もデータ保存や既存グラフは止めません。
 
 ```json
 {
-  "alert_key": "metric:sensor_minute:00_fa_b6_07_de_49:data",
-  "target_kind": "sensor",
-  "target_label": "00:fa:b6:07:de:49",
-  "reason": "investigating missing telemetry",
-  "duration": ""
+  "maintenance_mode": true,
+  "reason": "maintenance from /admin"
 }
 ```
-
-`POST /api/admin/devices/{mac}/maintenance` は sensor device 向けの互換 endpoint です。
-新しい実装では generic maintenance target を作成または削除し、既存の `/api/devices`
-互換表示用に device の `maintenance_mode` も更新します。管理画面の主操作は
-`Start maintenance` / `End maintenance` です。メンテ中もデータ保存や既存グラフは止めません。
 
 series API の `range` は `1d`, `1w`, `1m`, `3m`, `1y` に対応しています。
 

@@ -77,16 +77,6 @@ type healthState struct {
 	MutedUntil     *time.Time
 }
 
-type healthMaintenance struct {
-	AlertKey    string
-	TargetKind  string
-	TargetLabel string
-	Reason      string
-	StartedAt   time.Time
-	EndsAt      *time.Time
-	CreatedBy   string
-}
-
 type healthNotificationResult struct {
 	Status       string
 	HTTPStatus   *int
@@ -484,6 +474,7 @@ func evaluateSensorFreshness(ctx context.Context, db *pgx.Conn, cfg healthConfig
 		FROM devices d
 		LEFT JOIN sensor_minute s ON s.mac = d.mac
 		WHERE d.enabled
+		  AND NOT COALESCE(d.maintenance_mode, false)
 		GROUP BY d.mac, d.label
 		ORDER BY d.mac
 	`)
@@ -639,16 +630,6 @@ func applyHealthAlert(ctx context.Context, db *pgx.Conn, notifier healthNotifier
 	if err := upsertHealthState(ctx, db, alert, previous, now); err != nil {
 		return err
 	}
-	if alert.Status == healthStatusFiring {
-		maintenance, err := loadActiveHealthMaintenance(ctx, db, alert.Key, now)
-		if err != nil {
-			return err
-		}
-		if maintenance != nil {
-			log.Printf("health maintenance suppress alert=%s target=%s", alert.Key, maintenance.TargetLabel)
-			return nil
-		}
-	}
 	if !shouldNotifyHealthAlert(previous, existed, alert, cfg, now) {
 		return nil
 	}
@@ -684,35 +665,6 @@ func loadHealthState(ctx context.Context, db *pgx.Conn, key string) (healthState
 		state.MutedUntil = &mutedUntil.Time
 	}
 	return state, err
-}
-
-func loadActiveHealthMaintenance(ctx context.Context, db *pgx.Conn, key string, now time.Time) (*healthMaintenance, error) {
-	var maintenance healthMaintenance
-	var endsAt pgtype.Timestamptz
-	err := db.QueryRow(ctx, `
-		SELECT alert_key, target_kind, target_label, COALESCE(reason, ''), started_at, ends_at, COALESCE(created_by, '')
-		FROM health_maintenance_targets
-		WHERE alert_key = $1
-			AND (ends_at IS NULL OR ends_at > $2)
-	`, key, now).Scan(
-		&maintenance.AlertKey,
-		&maintenance.TargetKind,
-		&maintenance.TargetLabel,
-		&maintenance.Reason,
-		&maintenance.StartedAt,
-		&endsAt,
-		&maintenance.CreatedBy,
-	)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	if endsAt.Valid {
-		maintenance.EndsAt = &endsAt.Time
-	}
-	return &maintenance, nil
 }
 
 func upsertHealthState(ctx context.Context, db *pgx.Conn, alert healthAlert, previous healthState, now time.Time) error {

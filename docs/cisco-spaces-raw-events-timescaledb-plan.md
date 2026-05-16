@@ -68,11 +68,6 @@ CREATE TABLE IF NOT EXISTS cisco_spaces_raw_events (
     map_id text,
     payload jsonb NOT NULL,
     payload_sha256 text NOT NULL,
-    process_status text NOT NULL DEFAULT 'pending'
-        CHECK (process_status IN ('pending', 'processed', 'failed', 'ignored')),
-    processed_at timestamptz,
-    process_error text,
-    processor_version text,
     PRIMARY KEY (received_at, id)
 );
 
@@ -92,7 +87,8 @@ SELECT create_hypertable('cisco_spaces_raw_events', 'received_at', if_not_exists
 - `device_mac`, `device_id`, `location_id` などは検索用に raw JSON から抽出して持つ。
 - 抽出 metadata は検索・index・admin 表示用であり、source of truth は常に `payload`。
   抽出に失敗した field は `NULL` のままにし、raw event 自体は保存する。
-- `process_status` は production processor の処理結果を表す。
+- KISS のため、raw event table には processor の処理状態や trace は持たせない。
+  debug と export は保存済み payload から行う。
 
 ### metadata 抽出 mapping
 
@@ -137,9 +133,6 @@ CREATE INDEX IF NOT EXISTS cisco_spaces_raw_events_record_uid_idx
 CREATE INDEX IF NOT EXISTS cisco_spaces_raw_events_device_received_idx
     ON cisco_spaces_raw_events (device_mac, received_at DESC);
 
-CREATE INDEX IF NOT EXISTS cisco_spaces_raw_events_status_received_idx
-    ON cisco_spaces_raw_events (process_status, received_at);
-
 CREATE INDEX IF NOT EXISTS cisco_spaces_raw_events_received_idx
     ON cisco_spaces_raw_events (received_at DESC);
 ```
@@ -178,40 +171,6 @@ retention は `hm-db-migrate` か追加 migration で設定する。既存 produ
 `/docker-entrypoint-initdb.d/10-schema.sql` は再実行されないため、新規 migration として
 追加する。
 
-### raw event と normalized reading の対応
-
-既存 `sensor_minute` の primary key は `(ts, mac)` なので、複数 raw event が同じ minute に
-集約される。1対1対応ではなく、trace 用の別 table を持つ。
-
-```sql
-CREATE TABLE IF NOT EXISTS cisco_spaces_processing_events (
-    id bigserial PRIMARY KEY,
-    raw_received_at timestamptz NOT NULL,
-    raw_id bigint NOT NULL,
-    output_ts timestamptz,
-    output_mac text,
-    output_metric text,
-    output_table text NOT NULL DEFAULT 'sensor_minute',
-    processor_run_id text,
-    processor_version text,
-    status text NOT NULL CHECK (status IN ('processed', 'ignored', 'failed')),
-    reason text,
-    created_at timestamptz NOT NULL DEFAULT now()
-);
-
-CREATE INDEX IF NOT EXISTS cisco_spaces_processing_events_raw_idx
-    ON cisco_spaces_processing_events (raw_received_at, raw_id);
-```
-
-`cisco_spaces_processing_events` は `raw_received_at, raw_id` で raw event と対応づけるが、
-hard FK は置かない。`cisco_spaces_raw_events` は retention policy により chunk drop されるため、
-通常 table から hypertable への FK を置くと retention job を詰まらせるリスクがある。
-
-この table は「この raw event がどの normalized row に寄与したか」を調べるためのもの。
-1 raw event から複数 output row / metric / replay run が出る可能性があるため、
-primary key は独立した `id` にする。必須ではないが、TAC case や decoder regression
-調査で効く。
-
 ## component 分割
 
 ### hm-cisco-spaces-receiver
@@ -221,7 +180,7 @@ primary key は独立した `id` にする。必須ではないが、TAC case �
 - Cisco Spaces Firehose に接続する唯一の production process。
 - DB advisory lock で二重起動を防ぐ。
 - 受信 event を `cisco_spaces_raw_events` に保存する。
-- raw 保存に成功した event だけを processor 対象にする。
+- raw 保存に成功した event だけを inline decode 対象にする。
 - raw 保存失敗時の failure policy を明確にする。
 
 failure policy:
@@ -237,27 +196,15 @@ failure policy:
 
 責務:
 
-- `cisco_spaces_raw_events` の `pending` event を読む。
+- 将来 receiver / processor 分離を行う場合は、`cisco_spaces_raw_events` の payload を読む。
 - 既存 decoder を使って `sensor_minute` / `devices` に書く。
-- 処理結果を `process_status`, `processed_at`, `process_error` に保存する。
-- `cisco_spaces_processing_events` に trace を保存する。
+- 初期 KISS scope では processing trace table と raw event status column は持たない。
 
 処理単位:
 
-- 通常運用は小さな batch で `pending` を処理する。
+- 通常運用は小さな batch で時間範囲を処理する。
 - `FOR UPDATE SKIP LOCKED` を使えば、将来 processor を複数に増やせる。
 - ただし初期導入では processor は 1つでよい。
-
-例:
-
-```sql
-SELECT received_at, id, payload
-FROM cisco_spaces_raw_events
-WHERE process_status = 'pending'
-ORDER BY received_at, id
-LIMIT 500
-FOR UPDATE SKIP LOCKED;
-```
 
 ## 1分値生成
 
@@ -269,8 +216,8 @@ raw store 導入後は、同じ decode logic を processor に移す。
 - upload interval / minute bucket の既存挙動を維持する。
 - `device_id` と `deviceMacAddress` の整合性 check を維持する。
 - label 更新 logic を維持する。
-- `no_metric_values`, `device_id_mismatch`, `upload_interval` などの ignore reason を
-  `process_status='ignored'` と `process_error` または trace reason に残す。
+- `no_metric_values`, `device_id_mismatch`, `upload_interval` などの ignore reason を詳細に
+  追跡したくなった場合は、別 PR で trace table を再検討する。
 
 ## replay
 
@@ -332,7 +279,7 @@ Phase 1: schema
 
 - `cisco_spaces_raw_events` を migration で追加する。
 - hypertable 化、index、14日 retention を追加する。
-- `cisco_spaces_processing_events` は Phase 1 で一緒に入れるか、processor 実装時に入れる。
+- processing trace table は初期 KISS scope から外す。
 
 Phase 2: receiver
 
@@ -354,9 +301,8 @@ Phase 4: debug / replay / export
 
 Phase 5: admin visibility
 
-- `/admin` に raw event ingest rate、pending / failed process count、oldest pending age を表示する。
+- `/admin` に raw event ingest rate と latest received_at を表示する。
 - `/api/admin/cisco-spaces-raw-events/summary` のような summary endpoint を追加する。
-- failed processing が一定以上なら health alert にする。
 
 ## health monitoring
 
@@ -372,16 +318,13 @@ hm-cisco-spaces-processor / cisco_spaces_raw_events / default
 - receiver heartbeat stale
 - raw event data stale
 - processor heartbeat stale
-- pending raw events stale
-- process_status=failed が増えている
+- processor stale は processor 分離後に追加する。
 
 admin webhook payload には以下を入れる:
 
-- oldest pending raw event age
-- failed raw event count
 - latest received_at
-- latest processed_at
-- suggested action: export raw events / inspect processor error
+- raw event count
+- suggested action: export raw events / inspect receiver error
 
 ## 運用コマンド例
 
@@ -402,16 +345,6 @@ SELECT received_at, record_uid, event_type, device_id, location_id, payload
 FROM cisco_spaces_raw_events
 WHERE device_mac = '00:fa:b6:07:de:49'
   AND received_at >= now() - interval '6 hours'
-ORDER BY received_at DESC
-LIMIT 100;
-```
-
-processor failure:
-
-```sql
-SELECT received_at, id, device_mac, process_error
-FROM cisco_spaces_raw_events
-WHERE process_status = 'failed'
 ORDER BY received_at DESC
 LIMIT 100;
 ```

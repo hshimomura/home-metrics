@@ -219,21 +219,6 @@ CREATE TABLE IF NOT EXISTS health_alert_state (
 CREATE INDEX IF NOT EXISTS health_alert_state_status_updated_idx
     ON health_alert_state (status, updated_at DESC);
 
-CREATE TABLE IF NOT EXISTS health_maintenance_targets (
-    alert_key text PRIMARY KEY,
-    target_kind text NOT NULL,
-    target_label text NOT NULL DEFAULT '',
-    reason text,
-    started_at timestamptz NOT NULL DEFAULT now(),
-    ends_at timestamptz,
-    created_by text,
-    updated_at timestamptz NOT NULL DEFAULT now(),
-    CHECK (ends_at IS NULL OR ends_at > started_at)
-);
-
-CREATE INDEX IF NOT EXISTS health_maintenance_targets_active_idx
-    ON health_maintenance_targets (ends_at, updated_at DESC);
-
 CREATE TABLE IF NOT EXISTS admin_notification_channels (
     id bigserial PRIMARY KEY,
     channel_type text NOT NULL CHECK (channel_type IN ('generic_webhook')),
@@ -278,11 +263,6 @@ CREATE TABLE IF NOT EXISTS cisco_spaces_raw_events (
     map_id text,
     payload jsonb NOT NULL,
     payload_sha256 text NOT NULL,
-    process_status text NOT NULL DEFAULT 'pending'
-        CHECK (process_status IN ('pending', 'processed', 'failed', 'ignored')),
-    processed_at timestamptz,
-    process_error text,
-    processor_version text,
     PRIMARY KEY (received_at, id)
 );
 
@@ -295,29 +275,8 @@ CREATE INDEX IF NOT EXISTS cisco_spaces_raw_events_record_uid_idx
 CREATE INDEX IF NOT EXISTS cisco_spaces_raw_events_device_received_idx
     ON cisco_spaces_raw_events (device_mac, received_at DESC);
 
-CREATE INDEX IF NOT EXISTS cisco_spaces_raw_events_status_received_idx
-    ON cisco_spaces_raw_events (process_status, received_at);
-
 CREATE INDEX IF NOT EXISTS cisco_spaces_raw_events_received_idx
     ON cisco_spaces_raw_events (received_at DESC);
-
-CREATE TABLE IF NOT EXISTS cisco_spaces_processing_events (
-    id bigserial PRIMARY KEY,
-    raw_received_at timestamptz NOT NULL,
-    raw_id bigint NOT NULL,
-    output_ts timestamptz,
-    output_mac text,
-    output_metric text,
-    output_table text NOT NULL DEFAULT 'sensor_minute',
-    processor_run_id text,
-    processor_version text,
-    status text NOT NULL CHECK (status IN ('processed', 'ignored', 'failed')),
-    reason text,
-    created_at timestamptz NOT NULL DEFAULT now()
-);
-
-CREATE INDEX IF NOT EXISTS cisco_spaces_processing_events_raw_idx
-    ON cisco_spaces_processing_events (raw_received_at, raw_id);
 
 CREATE TABLE IF NOT EXISTS energy_devices (
     source text NOT NULL,
