@@ -401,9 +401,14 @@ GET    /api/health
 GET    /api/health/details
 GET    /admin
 GET    /admin.html
+GET    /api/admin/schema
+GET    /api/admin/cisco-spaces-firehose
 GET    /api/admin/collector-status
 GET    /api/admin/health-alerts
 GET    /api/admin/health-notification-events
+POST   /api/admin/health-alerts/{alert_key}/ack
+POST   /api/admin/health-alerts/{alert_key}/mute
+POST   /api/admin/health-alerts/{alert_key}/resolve
 POST   /api/admin/health-alerts/{alert_key}/test-webhook
 GET    /api/devices
 GET    /api/devices/{mac}/latest

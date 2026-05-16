@@ -307,6 +307,217 @@ paths:
           $ref: '#/components/responses/Error'
         '500':
           $ref: '#/components/responses/Error'
+  /api/health/details:
+    get:
+      operationId: getHealthDetails
+      summary: Get backend health summary
+      responses:
+        '200':
+          description: Backend health summary
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthDetails'
+        '401':
+          $ref: '#/components/responses/Error'
+        '500':
+          $ref: '#/components/responses/Error'
+        '503':
+          $ref: '#/components/responses/Error'
+  /api/admin/schema:
+    get:
+      operationId: getAdminSchema
+      summary: Get applied database schema migrations
+      responses:
+        '200':
+          description: Schema migration status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SchemaStatus'
+        '401':
+          $ref: '#/components/responses/Error'
+        '500':
+          $ref: '#/components/responses/Error'
+  /api/admin/cisco-spaces-firehose:
+    get:
+      operationId: getCiscoSpacesFirehoseStatus
+      summary: Get Cisco Spaces Firehose advisory lock status
+      responses:
+        '200':
+          description: Cisco Spaces Firehose status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CiscoSpacesFirehoseStatus'
+        '401':
+          $ref: '#/components/responses/Error'
+        '500':
+          $ref: '#/components/responses/Error'
+  /api/admin/collector-status:
+    get:
+      operationId: listCollectorStatus
+      summary: List collector self-reported status rows
+      responses:
+        '200':
+          description: Collector status list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/CollectorStatus'
+        '401':
+          $ref: '#/components/responses/Error'
+        '500':
+          $ref: '#/components/responses/Error'
+  /api/admin/health-alerts:
+    get:
+      operationId: listHealthAlerts
+      summary: List backend health alerts
+      parameters:
+        - name: status
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [firing, resolved]
+      responses:
+        '200':
+          description: Health alert list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/HealthAlert'
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '500':
+          $ref: '#/components/responses/Error'
+  /api/admin/health-alerts/{alert_key}/ack:
+    post:
+      operationId: ackHealthAlert
+      summary: Acknowledge a backend health alert
+      parameters:
+        - $ref: '#/components/parameters/AlertKeyPath'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/HealthAlertOperationRequest'
+      responses:
+        '200':
+          description: Updated health alert
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthAlert'
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+        '500':
+          $ref: '#/components/responses/Error'
+  /api/admin/health-alerts/{alert_key}/mute:
+    post:
+      operationId: muteHealthAlert
+      summary: Temporarily suppress a backend health alert
+      parameters:
+        - $ref: '#/components/parameters/AlertKeyPath'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/HealthAlertOperationRequest'
+      responses:
+        '200':
+          description: Updated health alert
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthAlert'
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+        '500':
+          $ref: '#/components/responses/Error'
+  /api/admin/health-alerts/{alert_key}/resolve:
+    post:
+      operationId: resolveHealthAlert
+      summary: Manually resolve a backend health alert
+      parameters:
+        - $ref: '#/components/parameters/AlertKeyPath'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/HealthAlertOperationRequest'
+      responses:
+        '200':
+          description: Updated health alert
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthAlert'
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+        '500':
+          $ref: '#/components/responses/Error'
+  /api/admin/health-alerts/{alert_key}/test-webhook:
+    post:
+      operationId: testHealthAlertWebhook
+      summary: Send a test admin webhook for a backend health alert
+      parameters:
+        - $ref: '#/components/parameters/AlertKeyPath'
+      responses:
+        '200':
+          description: Test webhook result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TestHealthWebhookResponse'
+        '401':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+        '500':
+          $ref: '#/components/responses/Error'
+        '502':
+          $ref: '#/components/responses/Error'
+        '503':
+          $ref: '#/components/responses/Error'
+  /api/admin/health-notification-events:
+    get:
+      operationId: listHealthNotificationEvents
+      summary: List backend health webhook delivery events
+      responses:
+        '200':
+          description: Health notification event list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/HealthNotificationEvent'
+        '401':
+          $ref: '#/components/responses/Error'
+        '500':
+          $ref: '#/components/responses/Error'
   /api/ios/devices:
     get:
       operationId: listIOSDevices
@@ -424,6 +635,12 @@ components:
       in: header
       name: X-API-Token
   parameters:
+    AlertKeyPath:
+      name: alert_key
+      in: path
+      required: true
+      schema:
+        type: string
     IdPath:
       name: id
       in: path
@@ -450,6 +667,80 @@ components:
           schema:
             $ref: '#/components/schemas/ErrorResponse'
   schemas:
+    CiscoSpacesFirehoseStatus:
+      type: object
+      required: [lock_key, lock_held, mode, configured_secondary_allowed, collector_status_present, collector_reporting, consecutive_failures]
+      properties:
+        lock_key:
+          type: integer
+          format: int64
+        lock_held:
+          type: boolean
+        lock_holder_pid:
+          type: integer
+        mode:
+          type: string
+        configured_secondary_allowed:
+          type: boolean
+          description: API server view of CISCO_SPACES_ALLOW_SECONDARY.
+        collector_status_present:
+          type: boolean
+        collector_reporting:
+          type: boolean
+        collector_updated_at:
+          type: string
+          format: date-time
+        last_attempt_at:
+          type: string
+          format: date-time
+        last_success_at:
+          type: string
+          format: date-time
+        last_data_at:
+          type: string
+          format: date-time
+        first_failure_at:
+          type: string
+          format: date-time
+        last_failure_at:
+          type: string
+          format: date-time
+        consecutive_failures:
+          type: integer
+        last_error:
+          type: string
+    CollectorStatus:
+      type: object
+      required: [collector_name, target_type, target_key, consecutive_failures, updated_at]
+      properties:
+        collector_name:
+          type: string
+        target_type:
+          type: string
+        target_key:
+          type: string
+        last_attempt_at:
+          type: string
+          format: date-time
+        last_success_at:
+          type: string
+          format: date-time
+        last_data_at:
+          type: string
+          format: date-time
+        first_failure_at:
+          type: string
+          format: date-time
+        last_failure_at:
+          type: string
+          format: date-time
+        last_error:
+          type: string
+        consecutive_failures:
+          type: integer
+        updated_at:
+          type: string
+          format: date-time
     AlertOperator:
       type: string
       enum: ['>', '>=', '<', '<=']
@@ -564,6 +855,113 @@ components:
       properties:
         error:
           type: string
+    HealthAlert:
+      type: object
+      required: [alert_key, status, severity, title, source, summary, labels, last_evaluated_at, updated_at]
+      properties:
+        alert_key:
+          type: string
+        status:
+          type: string
+          enum: [firing, resolved]
+        severity:
+          type: string
+          enum: [info, warning, critical]
+        title:
+          type: string
+        source:
+          type: string
+        summary:
+          type: string
+        labels:
+          type: object
+          additionalProperties:
+            type: string
+        first_fired_at:
+          type: string
+          format: date-time
+        last_evaluated_at:
+          type: string
+          format: date-time
+        last_notified_at:
+          type: string
+          format: date-time
+        acknowledged_at:
+          type: string
+          format: date-time
+        acknowledged_by:
+          type: string
+        muted_until:
+          type: string
+          format: date-time
+        muted_by:
+          type: string
+        muted_reason:
+          type: string
+        manually_resolved_at:
+          type: string
+          format: date-time
+        manually_resolved_by:
+          type: string
+        resolved_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    HealthAlertOperationRequest:
+      type: object
+      properties:
+        actor:
+          type: string
+        duration:
+          type: string
+          example: 1h
+        reason:
+          type: string
+    HealthDetails:
+      type: object
+      required: [status, database, collector_targets, stale_collectors, active_health_alerts, failed_deliveries_24h, webhook_configured]
+      properties:
+        status:
+          type: string
+        database:
+          type: string
+        collector_targets:
+          type: integer
+        stale_collectors:
+          type: integer
+        active_health_alerts:
+          type: integer
+        failed_deliveries_24h:
+          type: integer
+        webhook_configured:
+          type: boolean
+    HealthNotificationEvent:
+      type: object
+      required: [id, event_id, alert_key, channel_type, status, created_at]
+      properties:
+        id:
+          type: integer
+        event_id:
+          type: string
+        alert_key:
+          type: string
+        channel_id:
+          type: integer
+        channel_type:
+          type: string
+        status:
+          $ref: '#/components/schemas/NotificationStatus'
+        http_status:
+          type: integer
+        response_body:
+          type: string
+        error:
+          type: string
+        created_at:
+          type: string
+          format: date-time
     HealthResponse:
       type: object
       required: [status]
@@ -667,6 +1065,31 @@ components:
         created_at:
           type: string
           format: date-time
+    SchemaMigration:
+      type: object
+      required: [version, name, checksum, applied_at]
+      properties:
+        version:
+          type: integer
+          format: int64
+        name:
+          type: string
+        checksum:
+          type: string
+        applied_at:
+          type: string
+          format: date-time
+    SchemaStatus:
+      type: object
+      required: [current_version, migrations]
+      properties:
+        current_version:
+          type: integer
+          format: int64
+        migrations:
+          type: array
+          items:
+            $ref: '#/components/schemas/SchemaMigration'
     SensorSeries:
       type: object
       required: [mac, metric, range, points]
@@ -714,6 +1137,16 @@ components:
         sent_at:
           type: string
           format: date-time
+    TestHealthWebhookResponse:
+      type: object
+      required: [event_id, status]
+      properties:
+        event_id:
+          type: string
+        status:
+          type: string
+        http_status:
+          type: integer
     APNSEnvironment:
       type: string
       enum: [sandbox, production]

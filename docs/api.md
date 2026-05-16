@@ -173,6 +173,18 @@ Response `200`:
 }
 ```
 
+### GET /api/admin/schema
+
+適用済み DB migration と current schema version を返します。
+
+### GET /api/admin/cisco-spaces-firehose
+
+Cisco Spaces Firehose collector の advisory lock 状態、secondary 起動許可設定、
+collector status を返します。`lock_held=true` が通常の単一起動状態です。
+`configured_secondary_allowed` は API server が見ている
+`CISCO_SPACES_ALLOW_SECONDARY` です。diagnostic run で collector container だけに
+一時 env を渡した場合、この値とはズレることがあります。
+
 ### GET /api/admin/collector-status
 
 collector が自己申告した成功・失敗・データ保存時刻を返します。
@@ -181,6 +193,21 @@ collector が自己申告した成功・失敗・データ保存時刻を返し�
 
 `health_alert_state` の現在状態を返します。`?status=firing` または
 `?status=resolved` で絞り込めます。
+
+### POST /api/admin/health-alerts/{alert_key}/ack
+
+health alert を確認済みにします。通知抑止はしません。
+
+### POST /api/admin/health-alerts/{alert_key}/mute
+
+health alert の通知を一時抑止します。body は任意で
+`{"duration":"1h","reason":"..."}` を受け付けます。省略時は 1 時間 mute します。
+mute 中は firing 通知だけでなく recovery 通知も抑止します。
+
+### POST /api/admin/health-alerts/{alert_key}/resolve
+
+health alert を手動 resolved にします。根本原因が残っている場合は次回 evaluator で
+再び firing になるため、必要に応じて mute と組み合わせます。
 
 ### GET /api/admin/health-notification-events
 

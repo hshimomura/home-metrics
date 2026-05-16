@@ -25,9 +25,14 @@
 ```text
 GET /api/health
 GET /api/health/details
+GET /api/admin/schema
+GET /api/admin/cisco-spaces-firehose
 GET /api/admin/collector-status
 GET /api/admin/health-alerts
 GET /api/admin/health-notification-events
+POST /api/admin/health-alerts/{alert_key}/ack
+POST /api/admin/health-alerts/{alert_key}/mute
+POST /api/admin/health-alerts/{alert_key}/resolve
 POST /api/admin/health-alerts/{alert_key}/test-webhook
 GET /admin
 ```
@@ -88,6 +93,7 @@ ble_adapter
 
 - active incident の確認
 - 通知 cooldown / recovery 通知の判断
+- ack / mute / manual resolve の状態保存
 - `/api/health/details` の summary
 - `/admin` の Health Alerts 表示
 
@@ -408,13 +414,22 @@ docker compose --profile cisco-spaces up -d hm-cisco-spaces-collector
 advisory lock は二重起動を防ぐが、既存 production collector を自動停止するものではない。
 diagnostic run では上のように production collector を明示的に止める。
 
+## 実装済みの短期運用機能
+
+- `/admin` は Cisco Spaces Firehose advisory lock と secondary 起動許可状態を表示する。
+  secondary 起動許可は API server が見ている `CISCO_SPACES_ALLOW_SECONDARY` を表示する。
+  diagnostic run で collector container だけに一時 env を渡す場合は表示とズレる。
+- `/admin` は health alert の ack / mute / manual resolve を扱う。
+  mute 中は firing 通知だけでなく recovery 通知も抑止する。
+- `/api/admin/schema` は current schema version と適用済み migration を返す。
+
 ## 残っている改善項目
 
 短期:
 
-- `/admin` で Cisco Spaces Firehose lock / secondary 起動状態を見えるようにする。
-- `/admin` から ack / mute / manual resolve を扱う。
-- `/api/admin/schema` などで current schema version を返す。
+- ack / mute / manual resolve 操作の監査履歴を専用 event として残す。
+- `/admin` で collector / health alert の filter と search を強化する。
+- manual resolve 後に同じ条件で再 firing した場合の表示をより分かりやすくする。
 
 中期:
 
