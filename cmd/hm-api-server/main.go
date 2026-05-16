@@ -38,11 +38,14 @@ type apiServer struct {
 }
 
 type deviceResponse struct {
-	MAC        string `json:"mac"`
-	Label      string `json:"label"`
-	SensorCategory string `json:"sensor_category,omitempty"`
-	Location   string `json:"location,omitempty"`
-	Enabled    bool   `json:"enabled"`
+	MAC               string     `json:"mac"`
+	Label             string     `json:"label"`
+	SensorCategory        string     `json:"sensor_category,omitempty"`
+	Location          string     `json:"location,omitempty"`
+	Enabled           bool       `json:"enabled"`
+	MaintenanceMode   bool       `json:"maintenance_mode"`
+	MaintenanceReason string     `json:"maintenance_reason,omitempty"`
+	MaintenanceSince  *time.Time `json:"maintenance_since,omitempty"`
 }
 
 type latestResponse struct {
@@ -264,6 +267,7 @@ func newRouter(api *apiServer) http.Handler {
 	mux.HandleFunc("GET /api/admin/collector-status", api.handleCollectorStatus)
 	mux.HandleFunc("GET /api/admin/health-alerts", api.handleHealthAlerts)
 	mux.HandleFunc("GET /api/admin/health-notification-events", api.handleHealthNotificationEvents)
+	mux.HandleFunc("POST /api/admin/devices/{mac}/maintenance", api.handleDeviceMaintenance)
 	mux.HandleFunc("POST /api/admin/health-alerts/{alert_key}/ack", api.handleAckHealthAlert)
 	mux.HandleFunc("POST /api/admin/health-alerts/{alert_key}/mute", api.handleMuteHealthAlert)
 	mux.HandleFunc("POST /api/admin/health-alerts/{alert_key}/resolve", api.handleResolveHealthAlert)
@@ -391,7 +395,15 @@ func (api *apiServer) handleHealth(w http.ResponseWriter, r *http.Request) {
 
 func (api *apiServer) handleDevices(w http.ResponseWriter, r *http.Request) {
 	rows, err := api.db.Query(r.Context(), `
-		SELECT mac, label, COALESCE(sensor_category, ''), COALESCE(location, ''), enabled
+		SELECT
+			mac,
+			label,
+			COALESCE(sensor_category, ''),
+			COALESCE(location, ''),
+			enabled,
+			maintenance_mode,
+			COALESCE(maintenance_reason, ''),
+			maintenance_since
 		FROM devices
 		ORDER BY mac
 	`)
@@ -405,11 +417,13 @@ func (api *apiServer) handleDevices(w http.ResponseWriter, r *http.Request) {
 	devices := []deviceResponse{}
 	for rows.Next() {
 		var d deviceResponse
-		if err := rows.Scan(&d.MAC, &d.Label, &d.SensorCategory, &d.Location, &d.Enabled); err != nil {
+		var maintenanceSince pgtype.Timestamptz
+		if err := rows.Scan(&d.MAC, &d.Label, &d.SensorCategory, &d.Location, &d.Enabled, &d.MaintenanceMode, &d.MaintenanceReason, &maintenanceSince); err != nil {
 			log.Printf("scan devices: %v", err)
 			writeError(w, http.StatusInternalServerError, "scan devices")
 			return
 		}
+		d.MaintenanceSince = timePtrFromPg(maintenanceSince)
 		devices = append(devices, d)
 	}
 	if err := rows.Err(); err != nil {
@@ -1213,11 +1227,21 @@ func (api *apiServer) loadTestNotificationEvent(ctx context.Context) (testNotifi
 
 func (api *apiServer) loadDevice(ctx context.Context, mac string) (deviceResponse, error) {
 	var d deviceResponse
+	var maintenanceSince pgtype.Timestamptz
 	err := api.db.QueryRow(ctx, `
-		SELECT mac, label, COALESCE(sensor_category, ''), COALESCE(location, ''), enabled
+		SELECT
+			mac,
+			label,
+			COALESCE(sensor_category, ''),
+			COALESCE(location, ''),
+			enabled,
+			maintenance_mode,
+			COALESCE(maintenance_reason, ''),
+			maintenance_since
 		FROM devices
 		WHERE mac = $1
-	`, mac).Scan(&d.MAC, &d.Label, &d.SensorCategory, &d.Location, &d.Enabled)
+	`, mac).Scan(&d.MAC, &d.Label, &d.SensorCategory, &d.Location, &d.Enabled, &d.MaintenanceMode, &d.MaintenanceReason, &maintenanceSince)
+	d.MaintenanceSince = timePtrFromPg(maintenanceSince)
 	return d, err
 }
 

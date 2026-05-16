@@ -13,6 +13,9 @@ CREATE TABLE IF NOT EXISTS devices (
     sensor_category text,
     location text,
     enabled boolean NOT NULL DEFAULT true,
+    maintenance_mode boolean NOT NULL DEFAULT false,
+    maintenance_reason text,
+    maintenance_since timestamptz,
     created_at timestamptz NOT NULL DEFAULT now(),
     updated_at timestamptz NOT NULL DEFAULT now()
 );

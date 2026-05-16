@@ -84,9 +84,10 @@ type testHealthWebhookResponse struct {
 }
 
 type healthAlertOperationRequest struct {
-	Actor    string `json:"actor,omitempty"`
-	Duration string `json:"duration,omitempty"`
-	Reason   string `json:"reason,omitempty"`
+	Actor           string `json:"actor,omitempty"`
+	Duration        string `json:"duration,omitempty"`
+	Reason          string `json:"reason,omitempty"`
+	MaintenanceMode *bool  `json:"maintenance_mode,omitempty"`
 }
 
 type schemaMigrationResponse struct {
@@ -469,6 +470,102 @@ func (api *apiServer) handleResolveHealthAlert(w http.ResponseWriter, r *http.Re
 		return
 	}
 	api.writeHealthAlert(w, r, alertKey)
+}
+
+func (api *apiServer) handleDeviceMaintenance(w http.ResponseWriter, r *http.Request) {
+	mac := strings.ToLower(strings.TrimSpace(r.PathValue("mac")))
+	if mac == "" {
+		writeError(w, http.StatusNotFound, "device not found")
+		return
+	}
+	req, ok := decodeHealthAlertOperationRequest(w, r)
+	if !ok {
+		return
+	}
+	maintenanceMode := true
+	if req.MaintenanceMode != nil {
+		maintenanceMode = *req.MaintenanceMode
+	}
+	reason := strings.TrimSpace(req.Reason)
+	actor := healthAlertActor(req.Actor)
+
+	tx, err := api.db.Begin(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "begin device maintenance")
+		return
+	}
+	defer tx.Rollback(r.Context())
+
+	var rowsAffected int64
+	if maintenanceMode {
+		tag, execErr := tx.Exec(r.Context(), `
+			UPDATE devices
+			SET maintenance_mode = true,
+				maintenance_reason = NULLIF($2, ''),
+				maintenance_since = now(),
+				updated_at = now()
+			WHERE mac = $1
+		`, mac, reason)
+		err = execErr
+		rowsAffected = tag.RowsAffected()
+	} else {
+		tag, execErr := tx.Exec(r.Context(), `
+			UPDATE devices
+			SET maintenance_mode = false,
+				maintenance_reason = NULL,
+				maintenance_since = NULL,
+				updated_at = now()
+			WHERE mac = $1
+		`, mac)
+		err = execErr
+		rowsAffected = tag.RowsAffected()
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "update device maintenance")
+		return
+	}
+	if rowsAffected == 0 {
+		writeError(w, http.StatusNotFound, "device not found")
+		return
+	}
+	if maintenanceMode {
+		_, err = tx.Exec(r.Context(), `
+			UPDATE health_alert_state
+			SET status = 'resolved',
+				severity = 'info',
+				title = 'Sensor maintenance mode',
+				summary = CASE
+					WHEN NULLIF($2, '') IS NULL THEN source || ' is in maintenance mode.'
+					ELSE source || ' is in maintenance mode: ' || $2
+				END,
+				resolved_at = now(),
+				manually_resolved_at = now(),
+				manually_resolved_by = $3,
+				updated_at = now()
+			WHERE status = 'firing'
+				AND labels->>'kind' = 'sensor'
+				AND labels->>'mac' = $1
+		`, mac, reason, actor)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "resolve device health alerts")
+			return
+		}
+	}
+	if err := tx.Commit(r.Context()); err != nil {
+		writeError(w, http.StatusInternalServerError, "commit device maintenance")
+		return
+	}
+
+	device, err := api.loadDevice(r.Context(), mac)
+	if errors.Is(err, pgx.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "device not found")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "query device")
+		return
+	}
+	writeJSON(w, http.StatusOK, device)
 }
 
 func (api *apiServer) handleHealthNotificationEvents(w http.ResponseWriter, r *http.Request) {

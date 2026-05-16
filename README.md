@@ -410,6 +410,7 @@ POST   /api/admin/health-alerts/{alert_key}/ack
 POST   /api/admin/health-alerts/{alert_key}/mute
 POST   /api/admin/health-alerts/{alert_key}/resolve
 POST   /api/admin/health-alerts/{alert_key}/test-webhook
+POST   /api/admin/devices/{mac}/maintenance
 GET    /api/devices
 GET    /api/devices/{mac}/latest
 GET    /api/devices/{mac}/series?metric=temperature_c&range=1d
@@ -427,6 +428,11 @@ DELETE /api/ios/devices/{id}
 ```
 
 全 API は JSON を返します。エラー時の body は `{"error":"message"}` です。認証は `Authorization: Bearer <API_TOKEN>` を基本とし、`X-API-Token: <API_TOKEN>` も受け付けます。
+
+`POST /api/admin/devices/{mac}/maintenance` は sensor device を health evaluation から
+永続的に除外します。一時 mute と違い、`{"maintenance_mode": false}` で解除するまで
+data stale / missing health alert は再発火しません。データ閲覧用の `/api/devices` や
+既存グラフはそのまま使えます。
 
 series API の `range` は `1d`, `1w`, `1m`, `3m`, `1y` に対応しています。
 

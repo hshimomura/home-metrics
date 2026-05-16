@@ -478,6 +478,33 @@ paths:
           $ref: '#/components/responses/Error'
         '500':
           $ref: '#/components/responses/Error'
+  /api/admin/devices/{mac}/maintenance:
+    post:
+      operationId: setDeviceMaintenance
+      summary: Set or clear device maintenance mode for health monitoring
+      parameters:
+        - $ref: '#/components/parameters/MacPath'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/HealthAlertOperationRequest'
+      responses:
+        '200':
+          description: Updated device
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Device'
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+        '500':
+          $ref: '#/components/responses/Error'
   /api/admin/health-alerts/{alert_key}/test-webhook:
     post:
       operationId: testHealthAlertWebhook
@@ -798,7 +825,7 @@ components:
           default: true
     Device:
       type: object
-      required: [mac, label, enabled]
+      required: [mac, label, enabled, maintenance_mode]
       properties:
         mac:
           type: string
@@ -810,6 +837,13 @@ components:
           type: string
         enabled:
           type: boolean
+        maintenance_mode:
+          type: boolean
+        maintenance_reason:
+          type: string
+        maintenance_since:
+          type: string
+          format: date-time
     EnergyReading:
       type: object
       required: [ts, source, device_key, metric, value, unit]
@@ -919,6 +953,8 @@ components:
           example: 1h
         reason:
           type: string
+        maintenance_mode:
+          type: boolean
     HealthDetails:
       type: object
       required: [status, database, collector_targets, stale_collectors, active_health_alerts, failed_deliveries_24h, webhook_configured]

@@ -209,6 +209,25 @@ mute 中は firing 通知だけでなく recovery 通知も抑止します。
 health alert を手動 resolved にします。根本原因が残っている場合は次回 evaluator で
 再び firing になるため、必要に応じて mute と組み合わせます。
 
+### POST /api/admin/devices/{mac}/maintenance
+
+sensor device を maintenance mode に入れる、または解除します。maintenance mode の
+device は `sensor_minute` freshness health evaluation から除外されるため、別途解除するまで
+data stale / missing の health alert は発火しません。既存 firing sensor alert は maintenance
+開始時に resolved に更新されます。
+
+body は任意です。省略時は maintenance mode を有効にします。
+
+```json
+{
+  "maintenance_mode": true,
+  "reason": "sensor offline for maintenance",
+  "actor": "admin"
+}
+```
+
+解除する場合は `{"maintenance_mode": false}` を送ります。
+
 ### GET /api/admin/health-notification-events
 
 health alert の webhook 配送履歴を返します。

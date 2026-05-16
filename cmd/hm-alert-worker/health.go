@@ -474,6 +474,7 @@ func evaluateSensorFreshness(ctx context.Context, db *pgx.Conn, cfg healthConfig
 		FROM devices d
 		LEFT JOIN sensor_minute s ON s.mac = d.mac
 		WHERE d.enabled
+			AND NOT COALESCE(d.maintenance_mode, false)
 		GROUP BY d.mac, d.label
 		ORDER BY d.mac
 	`)
