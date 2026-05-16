@@ -23,6 +23,13 @@
     button { padding: 8px 12px; border: 1px solid #7c8a97; border-radius: 6px; background: #fff; cursor: pointer; }
     button:hover { background: #eef1f4; }
     button:disabled { cursor: wait; opacity: 0.65; }
+    .switch-button { display: inline-flex; align-items: center; gap: 8px; padding: 4px 8px 4px 4px; border: 0; background: transparent; color: inherit; }
+    .switch-button:hover { background: transparent; }
+    .switch-track { width: 42px; height: 24px; border-radius: 999px; background: #c7ced6; position: relative; transition: background 120ms ease; }
+    .switch-thumb { position: absolute; top: 2px; left: 2px; width: 20px; height: 20px; border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.28); transition: transform 120ms ease; }
+    .switch-button[aria-checked="true"] .switch-track { background: #34c759; }
+    .switch-button[aria-checked="true"] .switch-thumb { transform: translateX(18px); }
+    .switch-text { font-size: 13px; font-weight: 650; white-space: nowrap; }
     .toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
     .actions { display: flex; flex-wrap: wrap; gap: 6px; }
     .summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px; }
@@ -48,6 +55,9 @@
       th { background: #2a3036; }
       input, button { background: #1f2327; color: #e8eaed; border-color: #4b5560; }
       button:hover { background: #2a3036; }
+      .switch-button, .switch-button:hover { background: transparent; }
+      .switch-track { background: #4b5560; }
+      .switch-thumb { background: #f1f3f4; }
       .summary-label, .muted { color: #a8b0b8; }
       .ok, .resolved, .sent { color: #c8f2d0; background: #16351f; border-color: #2f6840; }
       .warning { color: #ffe0a3; background: #442c05; border-color: #76511b; }
@@ -97,7 +107,7 @@
     <section>
       <h2>Health Alerts</h2>
       <table>
-        <thead><tr><th>Status</th><th>Severity</th><th>Title</th><th>Source</th><th>Summary</th><th>Updated</th><th>Last Notified</th><th>Action</th></tr></thead>
+        <thead><tr><th>Status</th><th>Severity</th><th>Title</th><th>Source</th><th>Summary</th><th>Maintenance</th><th>Updated</th><th>Last Notified</th><th>Action</th></tr></thead>
         <tbody id="alerts"></tbody>
       </table>
     </section>
@@ -131,10 +141,29 @@
         } else {
           const action = button.dataset.alertAction;
           if (action === 'maintenance') {
-            await postJSON(`/api/admin/devices/${encodeURIComponent(button.dataset.deviceMac)}/maintenance`, {
-              maintenance_mode: button.dataset.maintenanceMode === 'true',
-              reason: button.dataset.maintenanceReason || 'changed from /admin'
-            });
+            if (button.dataset.maintenanceActive === 'true') {
+              await deleteJSON(`/api/admin/maintenance/${encodeURIComponent(button.dataset.alertKey)}`);
+            } else {
+              const reason = prompt('Maintenance reason', 'maintenance from /admin');
+              if (reason === null) {
+                button.disabled = false;
+                statusLine.textContent = 'Action cancelled';
+                return;
+              }
+              const duration = prompt('Duration (empty for indefinite, e.g. 1h, 24h)', '');
+              if (duration === null) {
+                button.disabled = false;
+                statusLine.textContent = 'Action cancelled';
+                return;
+              }
+              await postJSON('/api/admin/maintenance', {
+                alert_key: button.dataset.alertKey,
+                target_kind: button.dataset.targetKind || 'health_alert',
+                target_label: button.dataset.targetLabel || button.dataset.alertKey,
+                reason,
+                duration
+              });
+            }
           }
           statusLine.textContent = `Alert ${action} completed`;
         }
@@ -164,6 +193,12 @@
         body = JSON.stringify(arguments[1]);
       }
       const res = await fetch(path, { method: 'POST', headers: requestHeaders, body });
+      if (!res.ok) throw new Error(`${path}: ${res.status}`);
+      return res.json();
+    }
+
+    async function deleteJSON(path) {
+      const res = await fetch(path, { method: 'DELETE', headers: headers() });
       if (!res.ok) throw new Error(`${path}: ${res.status}`);
       return res.json();
     }
@@ -267,8 +302,7 @@
       `).join('') || '<tr><td colspan="9" class="muted">No collector status rows.</td></tr>';
     }
 
-    function renderAlerts(items, devices) {
-      const deviceMap = new Map(devices.map(device => [device.mac, device]));
+    function renderAlerts(items) {
       document.querySelector('#alerts').innerHTML = items.map(item => `
         <tr data-alert-key="${escapeHTML(item.alert_key)}">
           <td>${pill(item.status)}</td>
@@ -276,28 +310,31 @@
           <td>${escapeHTML(item.title)}<div class="muted mono-wrap"><code>${escapeHTML(item.alert_key)}</code></div></td>
           <td class="mono-wrap">${escapeHTML(item.source)}</td>
           <td>${escapeHTML(item.summary)}</td>
+          <td>${maintenanceState(item)}</td>
           <td>${time(item.updated_at)}<div class="muted">${age(item.updated_at)}</div></td>
           <td>${time(item.last_notified_at)}</td>
           <td>
             <div class="actions">
-              ${maintenanceButton(item, deviceMap)}
+              ${maintenanceButton(item)}
               <button data-test-alert="${escapeHTML(item.alert_key)}">Test webhook</button>
             </div>
           </td>
         </tr>
-      `).join('') || '<tr><td colspan="8" class="muted">No health alerts.</td></tr>';
+      `).join('') || '<tr><td colspan="9" class="muted">No health alerts.</td></tr>';
       focusDeepLinkedAlert();
     }
 
-    function maintenanceButton(item, deviceMap) {
-      const mac = item.labels?.kind === 'sensor' ? item.labels.mac : '';
-      if (!mac) return '';
-      const device = deviceMap.get(mac);
-      const inMaintenance = device?.maintenance_mode === true;
-      const label = inMaintenance ? 'Resume monitoring' : 'Pause monitoring';
-      const nextMode = inMaintenance ? 'false' : 'true';
-      const reason = inMaintenance ? '' : 'maintenance from /admin';
-      return `<button data-alert-action="maintenance" data-device-mac="${escapeHTML(mac)}" data-maintenance-mode="${nextMode}" data-maintenance-reason="${escapeHTML(reason)}">${label}</button>`;
+    function maintenanceState(item) {
+      if (!item.maintenance) return '<span class="muted">Not in maintenance</span>';
+      const until = item.maintenance.ends_at ? ` until ${escapeHTML(time(item.maintenance.ends_at))}` : '';
+      const reason = item.maintenance.reason ? `<div class="muted">${escapeHTML(item.maintenance.reason)}</div>` : '';
+      return `${pill('maintenance')}<div class="muted">In maintenance${until}</div>${reason}`;
+    }
+
+    function maintenanceButton(item) {
+      const active = item.maintenance ? 'true' : 'false';
+      const label = item.maintenance ? 'End maintenance' : 'Start maintenance';
+      return `<button class="switch-button" role="switch" aria-checked="${active}" aria-label="${label}" title="${label}" data-alert-action="maintenance" data-alert-key="${escapeHTML(item.alert_key)}" data-maintenance-active="${active}" data-target-kind="${escapeHTML(item.labels?.kind || 'health_alert')}" data-target-label="${escapeHTML(item.source || item.alert_key)}"><span class="switch-track"><span class="switch-thumb"></span></span><span class="switch-text">Maintenance</span></button>`;
     }
 
     function renderEvents(items) {
@@ -317,20 +354,19 @@
       statusLine.textContent = 'Loading';
       statusLine.className = 'muted';
       try {
-        const [summary, cisco, schema, collectors, alerts, events, devices] = await Promise.all([
+        const [summary, cisco, schema, collectors, alerts, events] = await Promise.all([
           getJSON('/api/health/details'),
           getJSON('/api/admin/cisco-spaces-firehose'),
           getJSON('/api/admin/schema'),
           getJSON('/api/admin/collector-status'),
           getJSON('/api/admin/health-alerts'),
           getJSON('/api/admin/health-notification-events'),
-          getJSON('/api/devices'),
         ]);
         renderSummary(summary);
         renderCiscoFirehose(cisco);
         renderSchema(schema);
         renderCollectors(collectors);
-        renderAlerts(alerts, devices);
+        renderAlerts(alerts);
         renderEvents(events);
         statusLine.textContent = `Loaded ${new Date().toLocaleString()}`;
       } catch (err) {

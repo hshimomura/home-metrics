@@ -219,6 +219,21 @@ CREATE TABLE IF NOT EXISTS health_alert_state (
 CREATE INDEX IF NOT EXISTS health_alert_state_status_updated_idx
     ON health_alert_state (status, updated_at DESC);
 
+CREATE TABLE IF NOT EXISTS health_maintenance_targets (
+    alert_key text PRIMARY KEY,
+    target_kind text NOT NULL,
+    target_label text NOT NULL DEFAULT '',
+    reason text,
+    started_at timestamptz NOT NULL DEFAULT now(),
+    ends_at timestamptz,
+    created_by text,
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    CHECK (ends_at IS NULL OR ends_at > started_at)
+);
+
+CREATE INDEX IF NOT EXISTS health_maintenance_targets_active_idx
+    ON health_maintenance_targets (ends_at, updated_at DESC);
+
 CREATE TABLE IF NOT EXISTS admin_notification_channels (
     id bigserial PRIMARY KEY,
     channel_type text NOT NULL CHECK (channel_type IN ('generic_webhook')),

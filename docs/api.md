@@ -194,12 +194,41 @@ collector が自己申告した成功・失敗・データ保存時刻を返し�
 `health_alert_state` の現在状態を返します。`?status=firing` または
 `?status=resolved` で絞り込めます。
 
+### GET /api/admin/maintenance
+
+現在 active な maintenance target を返します。
+
+### POST /api/admin/maintenance
+
+health alert target 単位で maintenance mode を開始します。sensor、collector、energy metric
+のいずれにも使えます。maintenance mode は underlying issue を resolved にせず、対象の
+health alert / webhook 通知だけを抑止します。
+
+```json
+{
+  "alert_key": "metric:sensor_minute:00_fa_b6_07_de_49:data",
+  "target_kind": "sensor",
+  "target_label": "00:fa:b6:07:de:49",
+  "duration": "",
+  "reason": "investigating missing telemetry",
+  "actor": "admin"
+}
+```
+
+`duration` を空にすると、明示的に終了するまで継続します。`1h`, `24h` のような Go duration
+文字列も指定できます。
+
+### DELETE /api/admin/maintenance/{alert_key}
+
+指定した target の maintenance mode を終了します。終了後は次回の health evaluation で
+現在状態が再評価されます。
+
 ### POST /api/admin/devices/{mac}/maintenance
 
-sensor device を maintenance mode に入れる、または解除します。maintenance mode の
-device は `sensor_minute` freshness health evaluation から除外されるため、別途解除するまで
-data stale / missing の health alert は発火しません。既存 firing sensor alert は maintenance
-開始時に resolved に更新されます。
+sensor device を maintenance mode に入れる、または解除する互換 endpoint です。
+新しい実装では generic maintenance target を作成または削除し、既存の `/api/devices`
+互換表示用に device の `maintenance_mode` も更新します。maintenance mode は underlying
+issue を resolved にしません。
 
 body は任意です。省略時は maintenance mode を有効にします。
 
@@ -213,7 +242,7 @@ body は任意です。省略時は maintenance mode を有効にします。
 
 解除する場合は `{"maintenance_mode": false}` を送ります。
 
-管理画面ではこの API を `Pause monitoring` / `Resume monitoring` として表示します。
+管理画面では generic maintenance API を `Start maintenance` / `End maintenance` として表示します。
 一時的な mute、ack、manual resolve は通常運用では混乱しやすいため、管理画面の主操作には
 出していません。
 

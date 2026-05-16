@@ -33,25 +33,26 @@ type collectorStatusResponse struct {
 }
 
 type healthAlertResponse struct {
-	AlertKey           string            `json:"alert_key"`
-	Status             string            `json:"status"`
-	Severity           string            `json:"severity"`
-	Title              string            `json:"title"`
-	Source             string            `json:"source"`
-	Summary            string            `json:"summary"`
-	Labels             map[string]string `json:"labels"`
-	FirstFiredAt       *time.Time        `json:"first_fired_at,omitempty"`
-	LastEvaluatedAt    time.Time         `json:"last_evaluated_at"`
-	LastNotifiedAt     *time.Time        `json:"last_notified_at,omitempty"`
-	AcknowledgedAt     *time.Time        `json:"acknowledged_at,omitempty"`
-	AcknowledgedBy     string            `json:"acknowledged_by,omitempty"`
-	MutedUntil         *time.Time        `json:"muted_until,omitempty"`
-	MutedBy            string            `json:"muted_by,omitempty"`
-	MutedReason        string            `json:"muted_reason,omitempty"`
-	ManuallyResolvedAt *time.Time        `json:"manually_resolved_at,omitempty"`
-	ManuallyResolvedBy string            `json:"manually_resolved_by,omitempty"`
-	ResolvedAt         *time.Time        `json:"resolved_at,omitempty"`
-	UpdatedAt          time.Time         `json:"updated_at"`
+	AlertKey           string               `json:"alert_key"`
+	Status             string               `json:"status"`
+	Severity           string               `json:"severity"`
+	Title              string               `json:"title"`
+	Source             string               `json:"source"`
+	Summary            string               `json:"summary"`
+	Labels             map[string]string    `json:"labels"`
+	FirstFiredAt       *time.Time           `json:"first_fired_at,omitempty"`
+	LastEvaluatedAt    time.Time            `json:"last_evaluated_at"`
+	LastNotifiedAt     *time.Time           `json:"last_notified_at,omitempty"`
+	AcknowledgedAt     *time.Time           `json:"acknowledged_at,omitempty"`
+	AcknowledgedBy     string               `json:"acknowledged_by,omitempty"`
+	MutedUntil         *time.Time           `json:"muted_until,omitempty"`
+	MutedBy            string               `json:"muted_by,omitempty"`
+	MutedReason        string               `json:"muted_reason,omitempty"`
+	ManuallyResolvedAt *time.Time           `json:"manually_resolved_at,omitempty"`
+	ManuallyResolvedBy string               `json:"manually_resolved_by,omitempty"`
+	ResolvedAt         *time.Time           `json:"resolved_at,omitempty"`
+	Maintenance        *maintenanceResponse `json:"maintenance,omitempty"`
+	UpdatedAt          time.Time            `json:"updated_at"`
 }
 
 type healthNotificationEventResponse struct {
@@ -88,6 +89,26 @@ type healthAlertOperationRequest struct {
 	Duration        string `json:"duration,omitempty"`
 	Reason          string `json:"reason,omitempty"`
 	MaintenanceMode *bool  `json:"maintenance_mode,omitempty"`
+}
+
+type maintenanceRequest struct {
+	AlertKey    string `json:"alert_key,omitempty"`
+	TargetKind  string `json:"target_kind,omitempty"`
+	TargetLabel string `json:"target_label,omitempty"`
+	Duration    string `json:"duration,omitempty"`
+	Reason      string `json:"reason,omitempty"`
+	Actor       string `json:"actor,omitempty"`
+}
+
+type maintenanceResponse struct {
+	AlertKey    string     `json:"alert_key"`
+	TargetKind  string     `json:"target_kind"`
+	TargetLabel string     `json:"target_label"`
+	Reason      string     `json:"reason,omitempty"`
+	StartedAt   time.Time  `json:"started_at"`
+	EndsAt      *time.Time `json:"ends_at,omitempty"`
+	CreatedBy   string     `json:"created_by,omitempty"`
+	UpdatedAt   time.Time  `json:"updated_at"`
 }
 
 type schemaMigrationResponse struct {
@@ -319,26 +340,37 @@ func (api *apiServer) handleHealthAlerts(w http.ResponseWriter, r *http.Request)
 	status := strings.TrimSpace(r.URL.Query().Get("status"))
 	query := `
 		SELECT
-			alert_key,
-			status,
-			severity,
-			title,
-			source,
-			summary,
-			labels,
-			first_fired_at,
-			last_evaluated_at,
-			last_notified_at,
-			acknowledged_at,
-			COALESCE(acknowledged_by, ''),
-			muted_until,
-			COALESCE(muted_by, ''),
-			COALESCE(muted_reason, ''),
-			manually_resolved_at,
-			COALESCE(manually_resolved_by, ''),
-			resolved_at,
-			updated_at
-		FROM health_alert_state
+			h.alert_key,
+			h.status,
+			h.severity,
+			h.title,
+			h.source,
+			h.summary,
+			h.labels,
+			h.first_fired_at,
+			h.last_evaluated_at,
+			h.last_notified_at,
+			h.acknowledged_at,
+			COALESCE(h.acknowledged_by, ''),
+			h.muted_until,
+			COALESCE(h.muted_by, ''),
+			COALESCE(h.muted_reason, ''),
+			h.manually_resolved_at,
+			COALESCE(h.manually_resolved_by, ''),
+			h.resolved_at,
+			h.updated_at,
+			COALESCE(m.alert_key, ''),
+			COALESCE(m.target_kind, ''),
+			COALESCE(m.target_label, ''),
+			COALESCE(m.reason, ''),
+			m.started_at,
+			m.ends_at,
+			COALESCE(m.created_by, ''),
+			m.updated_at
+		FROM health_alert_state h
+		LEFT JOIN health_maintenance_targets m
+			ON m.alert_key = h.alert_key
+			AND (m.ends_at IS NULL OR m.ends_at > now())
 	`
 	args := []any{}
 	if status != "" {
@@ -346,10 +378,10 @@ func (api *apiServer) handleHealthAlerts(w http.ResponseWriter, r *http.Request)
 			writeError(w, http.StatusBadRequest, "invalid status")
 			return
 		}
-		query += " WHERE status = $1"
+		query += " WHERE h.status = $1"
 		args = append(args, status)
 	}
-	query += " ORDER BY updated_at DESC, alert_key LIMIT 500"
+	query += " ORDER BY h.updated_at DESC, h.alert_key LIMIT 500"
 	rows, err := api.db.Query(r.Context(), query, args...)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "query health alerts")
@@ -371,6 +403,160 @@ func (api *apiServer) handleHealthAlerts(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	writeJSON(w, http.StatusOK, items)
+}
+
+func (api *apiServer) handleMaintenanceTargets(w http.ResponseWriter, r *http.Request) {
+	rows, err := api.db.Query(r.Context(), `
+		SELECT alert_key, target_kind, target_label, COALESCE(reason, ''), started_at, ends_at, COALESCE(created_by, ''), updated_at
+		FROM health_maintenance_targets
+		WHERE ends_at IS NULL OR ends_at > now()
+		ORDER BY updated_at DESC, alert_key
+	`)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "query maintenance targets")
+		return
+	}
+	defer rows.Close()
+
+	items := []maintenanceResponse{}
+	for rows.Next() {
+		item, err := scanMaintenance(rows)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "scan maintenance target")
+			return
+		}
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		writeError(w, http.StatusInternalServerError, "read maintenance targets")
+		return
+	}
+	writeJSON(w, http.StatusOK, items)
+}
+
+func (api *apiServer) handleStartMaintenance(w http.ResponseWriter, r *http.Request) {
+	req, ok := decodeMaintenanceRequest(w, r)
+	if !ok {
+		return
+	}
+	req.AlertKey = strings.TrimSpace(req.AlertKey)
+	if req.AlertKey == "" {
+		writeError(w, http.StatusBadRequest, "alert_key is required")
+		return
+	}
+	alertLabels := map[string]string{}
+	req.TargetKind = strings.TrimSpace(req.TargetKind)
+	req.TargetLabel = strings.TrimSpace(req.TargetLabel)
+	if alert, err := api.loadHealthAlert(r.Context(), req.AlertKey); err == nil {
+		alertLabels = alert.Labels
+		if req.TargetKind == "" {
+			req.TargetKind = alert.Labels["kind"]
+		}
+		if req.TargetLabel == "" {
+			req.TargetLabel = alert.Source
+		}
+	} else if !errors.Is(err, pgx.ErrNoRows) {
+		writeError(w, http.StatusInternalServerError, "query health alert")
+		return
+	}
+	if req.TargetKind == "" || req.TargetLabel == "" {
+		if req.TargetKind == "" {
+			req.TargetKind = "health_alert"
+		}
+		if req.TargetLabel == "" {
+			req.TargetLabel = req.AlertKey
+		}
+	}
+	endsAt, err := maintenanceEndsAt(req.Duration)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid maintenance duration")
+		return
+	}
+	actor := healthAlertActor(req.Actor)
+	row := api.db.QueryRow(r.Context(), `
+		INSERT INTO health_maintenance_targets (
+			alert_key,
+			target_kind,
+			target_label,
+			reason,
+			started_at,
+			ends_at,
+			created_by,
+			updated_at
+		)
+		VALUES ($1, $2, $3, NULLIF($4, ''), now(), $5, $6, now())
+		ON CONFLICT (alert_key) DO UPDATE SET
+			target_kind = EXCLUDED.target_kind,
+			target_label = EXCLUDED.target_label,
+			reason = EXCLUDED.reason,
+			started_at = EXCLUDED.started_at,
+			ends_at = EXCLUDED.ends_at,
+			created_by = EXCLUDED.created_by,
+			updated_at = EXCLUDED.updated_at
+		RETURNING alert_key, target_kind, target_label, COALESCE(reason, ''), started_at, ends_at, COALESCE(created_by, ''), updated_at
+	`, req.AlertKey, req.TargetKind, req.TargetLabel, strings.TrimSpace(req.Reason), endsAt, actor)
+	item, err := scanMaintenance(row)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "start maintenance")
+		return
+	}
+	if item.TargetKind == "sensor" {
+		if mac := strings.TrimSpace(alertLabels["mac"]); mac != "" {
+			if _, err := api.db.Exec(r.Context(), `
+				UPDATE devices
+				SET maintenance_mode = true,
+					maintenance_reason = NULLIF($2, ''),
+					maintenance_since = $3,
+					updated_at = now()
+				WHERE mac = $1
+			`, mac, item.Reason, item.StartedAt); err != nil {
+				writeError(w, http.StatusInternalServerError, "sync device maintenance")
+				return
+			}
+		}
+	}
+	writeJSON(w, http.StatusOK, item)
+}
+
+func (api *apiServer) handleEndMaintenance(w http.ResponseWriter, r *http.Request) {
+	alertKey := strings.TrimSpace(r.PathValue("alert_key"))
+	if alertKey == "" {
+		writeError(w, http.StatusNotFound, "maintenance target not found")
+		return
+	}
+	row := api.db.QueryRow(r.Context(), `
+		DELETE FROM health_maintenance_targets
+		WHERE alert_key = $1
+		RETURNING alert_key, target_kind, target_label, COALESCE(reason, ''), started_at, ends_at, COALESCE(created_by, ''), updated_at
+	`, alertKey)
+	item, err := scanMaintenance(row)
+	if errors.Is(err, pgx.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "maintenance target not found")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "end maintenance")
+		return
+	}
+	if item.TargetKind == "sensor" {
+		if mac, err := api.healthAlertMAC(r.Context(), item.AlertKey); err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			writeError(w, http.StatusInternalServerError, "query device maintenance")
+			return
+		} else if mac != "" {
+			if _, err := api.db.Exec(r.Context(), `
+				UPDATE devices
+				SET maintenance_mode = false,
+					maintenance_reason = NULL,
+					maintenance_since = NULL,
+					updated_at = now()
+				WHERE mac = $1
+			`, mac); err != nil {
+				writeError(w, http.StatusInternalServerError, "sync device maintenance")
+				return
+			}
+		}
+	}
+	writeJSON(w, http.StatusOK, item)
 }
 
 func (api *apiServer) handleAckHealthAlert(w http.ResponseWriter, r *http.Request) {
@@ -488,7 +674,7 @@ func (api *apiServer) handleDeviceMaintenance(w http.ResponseWriter, r *http.Req
 	}
 	reason := strings.TrimSpace(req.Reason)
 	actor := healthAlertActor(req.Actor)
-
+	alertKey := healthKey("metric", "sensor_minute", mac, "data")
 	tx, err := api.db.Begin(r.Context())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "begin device maintenance")
@@ -529,25 +715,48 @@ func (api *apiServer) handleDeviceMaintenance(w http.ResponseWriter, r *http.Req
 		return
 	}
 	if maintenanceMode {
-		_, err = tx.Exec(r.Context(), `
-			UPDATE health_alert_state
-			SET status = 'resolved',
-				severity = 'info',
-				title = 'Sensor maintenance mode',
-				summary = CASE
-					WHEN NULLIF($2, '') IS NULL THEN source || ' is in maintenance mode.'
-					ELSE source || ' is in maintenance mode: ' || $2
-				END,
-				resolved_at = now(),
-				manually_resolved_at = now(),
-				manually_resolved_by = $3,
-				updated_at = now()
-			WHERE status = 'firing'
-				AND labels->>'kind' = 'sensor'
-				AND labels->>'mac' = $1
-		`, mac, reason, actor)
+		var label string
+		err = tx.QueryRow(r.Context(), `
+			SELECT COALESCE(NULLIF(label, ''), mac)
+			FROM devices
+			WHERE mac = $1
+		`, mac).Scan(&label)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "resolve device health alerts")
+			writeError(w, http.StatusInternalServerError, "query device maintenance label")
+			return
+		}
+		_, err = tx.Exec(r.Context(), `
+			INSERT INTO health_maintenance_targets (
+				alert_key,
+				target_kind,
+				target_label,
+				reason,
+				started_at,
+				ends_at,
+				created_by,
+				updated_at
+			)
+			VALUES ($1, 'sensor', $2, NULLIF($3, ''), now(), NULL, $4, now())
+			ON CONFLICT (alert_key) DO UPDATE SET
+				target_kind = EXCLUDED.target_kind,
+				target_label = EXCLUDED.target_label,
+				reason = EXCLUDED.reason,
+				started_at = EXCLUDED.started_at,
+				ends_at = NULL,
+				created_by = EXCLUDED.created_by,
+				updated_at = EXCLUDED.updated_at
+		`, alertKey, label, reason, actor)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "start device maintenance")
+			return
+		}
+	} else {
+		_, err = tx.Exec(r.Context(), `
+			DELETE FROM health_maintenance_targets
+			WHERE alert_key = $1
+		`, alertKey)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "end device maintenance")
 			return
 		}
 	}
@@ -666,27 +875,38 @@ func (api *apiServer) handleTestHealthWebhook(w http.ResponseWriter, r *http.Req
 func (api *apiServer) loadHealthAlert(ctx context.Context, key string) (healthAlertResponse, error) {
 	row := api.db.QueryRow(ctx, `
 		SELECT
-			alert_key,
-			status,
-			severity,
-			title,
-			source,
-			summary,
-			labels,
-			first_fired_at,
-			last_evaluated_at,
-			last_notified_at,
-			acknowledged_at,
-			COALESCE(acknowledged_by, ''),
-			muted_until,
-			COALESCE(muted_by, ''),
-			COALESCE(muted_reason, ''),
-			manually_resolved_at,
-			COALESCE(manually_resolved_by, ''),
-			resolved_at,
-			updated_at
-		FROM health_alert_state
-		WHERE alert_key = $1
+			h.alert_key,
+			h.status,
+			h.severity,
+			h.title,
+			h.source,
+			h.summary,
+			h.labels,
+			h.first_fired_at,
+			h.last_evaluated_at,
+			h.last_notified_at,
+			h.acknowledged_at,
+			COALESCE(h.acknowledged_by, ''),
+			h.muted_until,
+			COALESCE(h.muted_by, ''),
+			COALESCE(h.muted_reason, ''),
+			h.manually_resolved_at,
+			COALESCE(h.manually_resolved_by, ''),
+			h.resolved_at,
+			h.updated_at,
+			COALESCE(m.alert_key, ''),
+			COALESCE(m.target_kind, ''),
+			COALESCE(m.target_label, ''),
+			COALESCE(m.reason, ''),
+			m.started_at,
+			m.ends_at,
+			COALESCE(m.created_by, ''),
+			m.updated_at
+		FROM health_alert_state h
+		LEFT JOIN health_maintenance_targets m
+			ON m.alert_key = h.alert_key
+			AND (m.ends_at IS NULL OR m.ends_at > now())
+		WHERE h.alert_key = $1
 	`, key)
 	return scanHealthAlert(row)
 }
@@ -695,6 +915,8 @@ func scanHealthAlert(row scanner) (healthAlertResponse, error) {
 	var item healthAlertResponse
 	var labels []byte
 	var firstFiredAt, lastNotifiedAt, acknowledgedAt, mutedUntil, manuallyResolvedAt, resolvedAt pgtype.Timestamptz
+	var maintenanceAlertKey, maintenanceTargetKind, maintenanceTargetLabel, maintenanceReason, maintenanceCreatedBy string
+	var maintenanceStartedAt, maintenanceEndsAt, maintenanceUpdatedAt pgtype.Timestamptz
 	if err := row.Scan(
 		&item.AlertKey,
 		&item.Status,
@@ -715,6 +937,14 @@ func scanHealthAlert(row scanner) (healthAlertResponse, error) {
 		&item.ManuallyResolvedBy,
 		&resolvedAt,
 		&item.UpdatedAt,
+		&maintenanceAlertKey,
+		&maintenanceTargetKind,
+		&maintenanceTargetLabel,
+		&maintenanceReason,
+		&maintenanceStartedAt,
+		&maintenanceEndsAt,
+		&maintenanceCreatedBy,
+		&maintenanceUpdatedAt,
 	); err != nil {
 		return healthAlertResponse{}, err
 	}
@@ -730,6 +960,18 @@ func scanHealthAlert(row scanner) (healthAlertResponse, error) {
 	item.MutedUntil = timePtrFromPg(mutedUntil)
 	item.ManuallyResolvedAt = timePtrFromPg(manuallyResolvedAt)
 	item.ResolvedAt = timePtrFromPg(resolvedAt)
+	if maintenanceAlertKey != "" && maintenanceStartedAt.Valid && maintenanceUpdatedAt.Valid {
+		item.Maintenance = &maintenanceResponse{
+			AlertKey:    maintenanceAlertKey,
+			TargetKind:  maintenanceTargetKind,
+			TargetLabel: maintenanceTargetLabel,
+			Reason:      maintenanceReason,
+			StartedAt:   maintenanceStartedAt.Time,
+			EndsAt:      timePtrFromPg(maintenanceEndsAt),
+			CreatedBy:   maintenanceCreatedBy,
+			UpdatedAt:   maintenanceUpdatedAt.Time,
+		}
+	}
 	return item, nil
 }
 
@@ -744,6 +986,16 @@ func (api *apiServer) writeHealthAlert(w http.ResponseWriter, r *http.Request, a
 		return
 	}
 	writeJSON(w, http.StatusOK, alert)
+}
+
+func (api *apiServer) healthAlertMAC(ctx context.Context, alertKey string) (string, error) {
+	var mac string
+	err := api.db.QueryRow(ctx, `
+		SELECT COALESCE(labels->>'mac', '')
+		FROM health_alert_state
+		WHERE alert_key = $1
+	`, alertKey).Scan(&mac)
+	return mac, err
 }
 
 func decodeHealthAlertOperationRequest(w http.ResponseWriter, r *http.Request) (healthAlertOperationRequest, bool) {
@@ -761,12 +1013,66 @@ func decodeHealthAlertOperationRequest(w http.ResponseWriter, r *http.Request) (
 	return req, true
 }
 
+func decodeMaintenanceRequest(w http.ResponseWriter, r *http.Request) (maintenanceRequest, bool) {
+	var req maintenanceRequest
+	if r.Body == nil || r.ContentLength == 0 {
+		return req, true
+	}
+	defer r.Body.Close()
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return maintenanceRequest{}, false
+	}
+	return req, true
+}
+
+func maintenanceEndsAt(value string) (*time.Time, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil, nil
+	}
+	duration, err := time.ParseDuration(value)
+	if err != nil || duration <= 0 {
+		return nil, errors.New("invalid duration")
+	}
+	endsAt := time.Now().Add(duration)
+	return &endsAt, nil
+}
+
+func scanMaintenance(row scanner) (maintenanceResponse, error) {
+	var item maintenanceResponse
+	var endsAt pgtype.Timestamptz
+	if err := row.Scan(
+		&item.AlertKey,
+		&item.TargetKind,
+		&item.TargetLabel,
+		&item.Reason,
+		&item.StartedAt,
+		&endsAt,
+		&item.CreatedBy,
+		&item.UpdatedAt,
+	); err != nil {
+		return maintenanceResponse{}, err
+	}
+	item.EndsAt = timePtrFromPg(endsAt)
+	return item, nil
+}
+
 func healthAlertActor(actor string) string {
 	actor = strings.TrimSpace(actor)
 	if actor == "" {
 		return "admin-api"
 	}
 	return actor
+}
+
+func healthKey(parts ...string) string {
+	for i, part := range parts {
+		parts[i] = strings.ReplaceAll(strings.TrimSpace(part), ":", "_")
+	}
+	return strings.Join(parts, ":")
 }
 
 func advisoryLockParts(key int64) (int64, int64) {
