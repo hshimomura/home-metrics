@@ -82,6 +82,10 @@ SELECT create_hypertable('cisco_spaces_raw_events', 'received_at', if_not_exists
 主な考え方:
 
 - `payload` は Cisco Spaces から受け取った event object をそのまま保存する。
+  ただし `jsonb` は key order や whitespace などの byte-level 表現を保持しない。
+  この計画で保存する raw は byte-for-byte raw bytes ではなく、semantic raw JSON とする。
+  Cisco TAC case で受信 bytes そのものが必要になった場合は、`payload_raw text` または
+  `payload_json json` を追加する。
 - `record_uid` が存在する場合は dedupe の主な材料にする。ただし hypertable 上の
   global unique index にはしない。
 - `payload_sha256` は `record_uid` が無い event の重複検出と case export の照合に使う。
@@ -192,15 +196,16 @@ CREATE TABLE IF NOT EXISTS cisco_spaces_processing_events (
     processor_version text,
     status text NOT NULL CHECK (status IN ('processed', 'ignored', 'failed')),
     reason text,
-    created_at timestamptz NOT NULL DEFAULT now(),
-    FOREIGN KEY (raw_received_at, raw_id)
-        REFERENCES cisco_spaces_raw_events (received_at, id)
-        ON DELETE CASCADE
+    created_at timestamptz NOT NULL DEFAULT now()
 );
 
 CREATE INDEX IF NOT EXISTS cisco_spaces_processing_events_raw_idx
     ON cisco_spaces_processing_events (raw_received_at, raw_id);
 ```
+
+`cisco_spaces_processing_events` は `raw_received_at, raw_id` で raw event と対応づけるが、
+hard FK は置かない。`cisco_spaces_raw_events` は retention policy により chunk drop されるため、
+通常 table から hypertable への FK を置くと retention job を詰まらせるリスクがある。
 
 この table は「この raw event がどの normalized row に寄与したか」を調べるためのもの。
 1 raw event から複数 output row / metric / replay run が出る可能性があるため、

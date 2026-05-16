@@ -3,6 +3,8 @@ package main
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -35,6 +37,7 @@ const (
 	defaultReconnectMaxDelay = time.Minute
 	defaultStreamHeartbeat   = time.Minute
 	ciscoSpacesLockKey       = int64(734829148912345)
+	processorVersion         = "hm-cisco-spaces-collector/raw-v1"
 )
 
 type config struct {
@@ -57,6 +60,7 @@ type config struct {
 }
 
 type firehoseEvent struct {
+	RecordUID     string         `json:"recordUid"`
 	EventType     string         `json:"eventType"`
 	RecordTS      int64          `json:"recordTimestamp"`
 	IOTTelemetry  telemetry      `json:"iotTelemetry"`
@@ -64,14 +68,16 @@ type firehoseEvent struct {
 }
 
 type telemetry struct {
-	DeviceInfo      deviceInfo       `json:"deviceInfo"`
-	Temperature     *temperatureData `json:"temperature"`
-	Humidity        *humidityData    `json:"humidity"`
-	AirPressure     *airPressureData `json:"airPressure"`
-	CarbonEmissions *carbonData      `json:"carbonEmissions"`
-	Illuminance     *illuminanceData `json:"illuminance"`
-	Battery         *batteryData     `json:"battery"`
-	TVOC            *tvocData        `json:"tvoc"`
+	DeviceInfo       deviceInfo       `json:"deviceInfo"`
+	Temperature      *temperatureData `json:"temperature"`
+	Humidity         *humidityData    `json:"humidity"`
+	AirPressure      *airPressureData `json:"airPressure"`
+	CarbonEmissions  *carbonData      `json:"carbonEmissions"`
+	Illuminance      *illuminanceData `json:"illuminance"`
+	Battery          *batteryData     `json:"battery"`
+	TVOC             *tvocData        `json:"tvoc"`
+	DetectedPosition *positionData    `json:"detectedPosition"`
+	Location         *locationData    `json:"location"`
 }
 
 type deviceInfo struct {
@@ -107,6 +113,15 @@ type batteryData struct {
 
 type tvocData struct {
 	ValueInPPB float64 `json:"valueInPpb"`
+}
+
+type positionData struct {
+	MapID      string `json:"mapId"`
+	LocationID string `json:"locationId"`
+}
+
+type locationData struct {
+	LocationID string `json:"locationId"`
 }
 
 type metric string
@@ -163,6 +178,23 @@ type statusReporter struct {
 	mu     *sync.Mutex
 	db     *pgx.Conn
 	target collectorstatus.Target
+}
+
+type rawEventRef struct {
+	ReceivedAt time.Time
+	ID         int64
+}
+
+type rawEventMetadata struct {
+	RecordUID     string
+	RecordTS      *time.Time
+	EventType     string
+	DeviceMAC     string
+	DeviceID      string
+	DeviceLabel   string
+	LocationID    string
+	MapID         string
+	PayloadSHA256 string
 }
 
 func (r *statusReporter) MarkSuccess(ctx context.Context) {
@@ -259,13 +291,28 @@ func main() {
 		reporter.MarkFailure(ctx, err)
 	}, func() {
 		reporter.MarkSuccess(ctx)
-	}, func(event firehoseEvent) {
-		reading, ok, err := p.processEvent(event)
+	}, func(event firehoseEvent, raw []byte) {
+		var rawRef *rawEventRef
+		if !cfg.DryRun {
+			dbMu.Lock()
+			ref, err := insertCiscoSpacesRawEvent(ctx, db, event, raw)
+			dbMu.Unlock()
+			if err != nil {
+				log.Printf("store Cisco Spaces raw event: %v", err)
+				reporter.MarkFailure(ctx, err)
+				return
+			}
+			rawRef = &ref
+		}
+
+		reading, ok, ignoreReason, err := p.processEvent(event)
 		if err != nil {
 			log.Printf("process Cisco Spaces event: %v", err)
+			markRawProcessing(ctx, dbMu, db, rawRef, "failed", err.Error(), nil)
 			return
 		}
 		if !ok {
+			markRawProcessing(ctx, dbMu, db, rawRef, "ignored", ignoreReason, nil)
 			return
 		}
 		if cfg.DryRun {
@@ -277,9 +324,11 @@ func main() {
 		dbMu.Unlock()
 		if err != nil {
 			log.Printf("write Cisco Spaces reading mac=%s ts=%s: %v", reading.MAC, reading.TS.Format(time.RFC3339), err)
+			markRawProcessing(ctx, dbMu, db, rawRef, "failed", err.Error(), &reading)
 			reporter.MarkFailure(ctx, err)
 			return
 		}
+		markRawProcessing(ctx, dbMu, db, rawRef, "processed", "", &reading)
 		reporter.MarkDataSuccess(ctx)
 		log.Printf("stored Cisco Spaces reading mac=%s ts=%s", reading.MAC, reading.TS.Format(time.RFC3339))
 	})
@@ -357,7 +406,7 @@ func newProcessor(cfg config) *processor {
 	}
 }
 
-func streamWithReconnect(ctx context.Context, client *http.Client, cfg config, handleError func(error), handleHeartbeat func(), handle func(firehoseEvent)) {
+func streamWithReconnect(ctx context.Context, client *http.Client, cfg config, handleError func(error), handleHeartbeat func(), handle func(firehoseEvent, []byte)) {
 	backoff := cfg.ReconnectMinDelay
 	for ctx.Err() == nil {
 		err := streamOnce(ctx, client, cfg, handleHeartbeat, handle)
@@ -380,7 +429,7 @@ func streamWithReconnect(ctx context.Context, client *http.Client, cfg config, h
 	}
 }
 
-func streamOnce(ctx context.Context, client *http.Client, cfg config, handleHeartbeat func(), handle func(firehoseEvent)) error {
+func streamOnce(ctx context.Context, client *http.Client, cfg config, handleHeartbeat func(), handle func(firehoseEvent, []byte)) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, cfg.FirehoseURL, nil)
 	if err != nil {
 		return err
@@ -415,7 +464,7 @@ func streamOnce(ctx context.Context, client *http.Client, cfg config, handleHear
 			log.Printf("decode Cisco Spaces event: %v", err)
 			continue
 		}
-		handle(event)
+		handle(event, []byte(line))
 	}
 	if err := scanner.Err(); err != nil {
 		return err
@@ -436,28 +485,30 @@ func streamHeartbeat(ctx context.Context, interval time.Duration, handleHeartbea
 	}
 }
 
-func (p *processor) processEvent(event firehoseEvent) (sensorReading, bool, error) {
+func (p *processor) processEvent(event firehoseEvent) (sensorReading, bool, string, error) {
 	if event.EventType != "IOT_TELEMETRY" {
-		return sensorReading{}, false, nil
+		return sensorReading{}, false, "non_iot_telemetry_event", nil
 	}
 	if event.RecordTS <= 0 {
 		p.debug("skip Cisco Spaces event reason=missing_record_ts")
-		return sensorReading{}, false, nil
+		return sensorReading{}, false, "missing_record_ts", nil
 	}
 	info := event.IOTTelemetry.DeviceInfo
 	mac := normalizeMAC(info.DeviceMACAddress)
 	if mac == "" {
 		p.debug("skip Cisco Spaces event reason=missing_device_mac device_id=%q label=%q", info.DeviceID, info.Label)
-		return sensorReading{}, false, nil
+		return sensorReading{}, false, "missing_device_mac", nil
 	}
 	if deviceIDConflictsWithMAC(info) {
 		p.debug("skip Cisco Spaces event reason=device_id_mismatch mac=%s device_id=%q label=%q", mac, info.DeviceID, info.Label)
-		return sensorReading{}, false, nil
+		return sensorReading{}, false, "device_id_mismatch", nil
 	}
 
 	ts := time.UnixMilli(event.RecordTS).UTC()
 	values := p.extractValues(mac, event.IOTTelemetry)
+	ignoreReason := ""
 	if len(values) == 0 {
+		ignoreReason = "no_metric_values"
 		p.debug("skip Cisco Spaces event reason=no_metric_values mac=%s device_id=%q label=%q ts=%s", mac, info.DeviceID, info.Label, ts.Format(time.RFC3339))
 	}
 	for _, value := range values {
@@ -465,16 +516,19 @@ func (p *processor) processEvent(event firehoseEvent) (sensorReading, bool, erro
 	}
 	if lastUpload, ok := p.lastUploads[mac]; ok && ts.Sub(lastUpload) < p.cfg.UploadInterval {
 		p.debug("skip Cisco Spaces event reason=upload_interval mac=%s label=%q ts=%s last_upload=%s values=%d", mac, info.Label, ts.Format(time.RFC3339), lastUpload.Format(time.RFC3339), len(values))
-		return sensorReading{}, false, nil
+		return sensorReading{}, false, "upload_interval", nil
 	}
 	reading := p.buildReading(mac, strings.TrimSpace(info.Label), ts)
 	if reading.empty() {
+		if ignoreReason == "" {
+			ignoreReason = "empty_reading"
+		}
 		p.debug("skip Cisco Spaces event reason=empty_reading mac=%s label=%q ts=%s values=%d windows=%s", mac, info.Label, ts.Format(time.RFC3339), len(values), p.debugWindows(mac))
-		return sensorReading{}, false, nil
+		return sensorReading{}, false, ignoreReason, nil
 	}
 	p.lastUploads[mac] = ts
 	p.debug("accept Cisco Spaces event mac=%s label=%q ts=%s values=%d windows=%s", mac, info.Label, ts.Format(time.RFC3339), len(values), p.debugWindows(mac))
-	return reading, true, nil
+	return reading, true, "", nil
 }
 
 func (p *processor) debug(format string, args ...any) {
@@ -578,6 +632,114 @@ func (p *processor) fresh(fields map[metric]recentMetric, name metric, now time.
 		return nil
 	}
 	return floatPtr(field.Value)
+}
+
+func insertCiscoSpacesRawEvent(ctx context.Context, db *pgx.Conn, event firehoseEvent, raw []byte) (rawEventRef, error) {
+	meta := extractRawEventMetadata(event, raw)
+	var ref rawEventRef
+	err := db.QueryRow(ctx, `
+		INSERT INTO cisco_spaces_raw_events (
+			record_uid,
+			record_timestamp,
+			event_type,
+			device_mac,
+			device_id,
+			device_label,
+			location_id,
+			map_id,
+			payload,
+			payload_sha256
+		)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10)
+		RETURNING received_at, id
+	`, nullableString(meta.RecordUID, meta.RecordUID != ""),
+		meta.RecordTS,
+		nullableString(meta.EventType, meta.EventType != ""),
+		nullableString(meta.DeviceMAC, meta.DeviceMAC != ""),
+		nullableString(meta.DeviceID, meta.DeviceID != ""),
+		nullableString(meta.DeviceLabel, meta.DeviceLabel != ""),
+		nullableString(meta.LocationID, meta.LocationID != ""),
+		nullableString(meta.MapID, meta.MapID != ""),
+		string(raw),
+		meta.PayloadSHA256,
+	).Scan(&ref.ReceivedAt, &ref.ID)
+	return ref, err
+}
+
+func extractRawEventMetadata(event firehoseEvent, raw []byte) rawEventMetadata {
+	sum := sha256.Sum256(raw)
+	meta := rawEventMetadata{
+		RecordUID:     strings.TrimSpace(event.RecordUID),
+		EventType:     strings.TrimSpace(event.EventType),
+		DeviceMAC:     normalizeMAC(event.IOTTelemetry.DeviceInfo.DeviceMACAddress),
+		DeviceID:      strings.TrimSpace(event.IOTTelemetry.DeviceInfo.DeviceID),
+		DeviceLabel:   strings.TrimSpace(event.IOTTelemetry.DeviceInfo.Label),
+		PayloadSHA256: hex.EncodeToString(sum[:]),
+	}
+	if event.RecordTS > 0 {
+		ts := time.UnixMilli(event.RecordTS).UTC()
+		meta.RecordTS = &ts
+	}
+	if event.IOTTelemetry.Location != nil {
+		meta.LocationID = strings.TrimSpace(event.IOTTelemetry.Location.LocationID)
+	}
+	if event.IOTTelemetry.DetectedPosition != nil {
+		if meta.LocationID == "" {
+			meta.LocationID = strings.TrimSpace(event.IOTTelemetry.DetectedPosition.LocationID)
+		}
+		meta.MapID = strings.TrimSpace(event.IOTTelemetry.DetectedPosition.MapID)
+	}
+	return meta
+}
+
+func markRawProcessing(ctx context.Context, mu *sync.Mutex, db *pgx.Conn, ref *rawEventRef, status string, reason string, reading *sensorReading) {
+	if db == nil || ref == nil {
+		return
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if err := updateCiscoSpacesRawEventProcessing(ctx, db, *ref, status, reason, reading); err != nil {
+		log.Printf("update Cisco Spaces raw event status=%s raw_id=%d: %v", status, ref.ID, err)
+	}
+}
+
+func updateCiscoSpacesRawEventProcessing(ctx context.Context, db *pgx.Conn, ref rawEventRef, status string, reason string, reading *sensorReading) error {
+	processError := ""
+	if status == "failed" {
+		processError = reason
+	}
+	if _, err := db.Exec(ctx, `
+		UPDATE cisco_spaces_raw_events
+		SET process_status = $3,
+			processed_at = now(),
+			process_error = NULLIF($4, ''),
+			processor_version = $5
+		WHERE received_at = $1
+			AND id = $2
+	`, ref.ReceivedAt, ref.ID, status, processError, processorVersion); err != nil {
+		return err
+	}
+
+	var outputTS any
+	var outputMAC any
+	if reading != nil {
+		outputTS = reading.TS
+		outputMAC = reading.MAC
+	}
+	_, err := db.Exec(ctx, `
+		INSERT INTO cisco_spaces_processing_events (
+			raw_received_at,
+			raw_id,
+			output_ts,
+			output_mac,
+			output_table,
+			processor_version,
+			status,
+			reason
+		)
+		VALUES ($1, $2, $3, $4, 'sensor_minute', $5, $6, NULLIF($7, ''))
+	`, ref.ReceivedAt, ref.ID, outputTS, outputMAC, processorVersion, status, reason)
+	return err
 }
 
 func writeReading(ctx context.Context, db *pgx.Conn, reading sensorReading) error {

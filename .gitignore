@@ -29,3 +29,4 @@ ble-scan.jsonl
 .vscode/settings.json
 influx-import
 tools/__pycache__/*
+.DS_Store
