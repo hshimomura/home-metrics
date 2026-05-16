@@ -194,21 +194,6 @@ collector が自己申告した成功・失敗・データ保存時刻を返し�
 `health_alert_state` の現在状態を返します。`?status=firing` または
 `?status=resolved` で絞り込めます。
 
-### POST /api/admin/health-alerts/{alert_key}/ack
-
-health alert を確認済みにします。通知抑止はしません。
-
-### POST /api/admin/health-alerts/{alert_key}/mute
-
-health alert の通知を一時抑止します。body は任意で
-`{"duration":"1h","reason":"..."}` を受け付けます。省略時は 1 時間 mute します。
-mute 中は firing 通知だけでなく recovery 通知も抑止します。
-
-### POST /api/admin/health-alerts/{alert_key}/resolve
-
-health alert を手動 resolved にします。根本原因が残っている場合は次回 evaluator で
-再び firing になるため、必要に応じて mute と組み合わせます。
-
 ### POST /api/admin/devices/{mac}/maintenance
 
 sensor device を maintenance mode に入れる、または解除します。maintenance mode の
@@ -227,6 +212,10 @@ body は任意です。省略時は maintenance mode を有効にします。
 ```
 
 解除する場合は `{"maintenance_mode": false}` を送ります。
+
+管理画面ではこの API を `Pause monitoring` / `Resume monitoring` として表示します。
+一時的な mute、ack、manual resolve は通常運用では混乱しやすいため、管理画面の主操作には
+出していません。
 
 ### GET /api/admin/health-notification-events
 

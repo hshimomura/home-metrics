@@ -406,9 +406,6 @@ GET    /api/admin/cisco-spaces-firehose
 GET    /api/admin/collector-status
 GET    /api/admin/health-alerts
 GET    /api/admin/health-notification-events
-POST   /api/admin/health-alerts/{alert_key}/ack
-POST   /api/admin/health-alerts/{alert_key}/mute
-POST   /api/admin/health-alerts/{alert_key}/resolve
 POST   /api/admin/health-alerts/{alert_key}/test-webhook
 POST   /api/admin/devices/{mac}/maintenance
 GET    /api/devices
@@ -432,7 +429,8 @@ DELETE /api/ios/devices/{id}
 `POST /api/admin/devices/{mac}/maintenance` は sensor device を health evaluation から
 永続的に除外します。一時 mute と違い、`{"maintenance_mode": false}` で解除するまで
 data stale / missing health alert は再発火しません。データ閲覧用の `/api/devices` や
-既存グラフはそのまま使えます。
+既存グラフはそのまま使えます。管理画面では `Pause monitoring` / `Resume monitoring`
+として表示します。
 
 series API の `range` は `1d`, `1w`, `1m`, `3m`, `1y` に対応しています。
 

@@ -97,7 +97,7 @@
     <section>
       <h2>Health Alerts</h2>
       <table>
-        <thead><tr><th>Status</th><th>Severity</th><th>Title</th><th>Source</th><th>Summary</th><th>Updated</th><th>Last Notified</th><th>State</th><th>Action</th></tr></thead>
+        <thead><tr><th>Status</th><th>Severity</th><th>Title</th><th>Source</th><th>Summary</th><th>Updated</th><th>Last Notified</th><th>Action</th></tr></thead>
         <tbody id="alerts"></tbody>
       </table>
     </section>
@@ -130,15 +130,11 @@
           statusLine.textContent = `Test webhook ${result.status}: ${result.event_id}`;
         } else {
           const action = button.dataset.alertAction;
-          const alertKey = button.dataset.alertKey;
           if (action === 'maintenance') {
             await postJSON(`/api/admin/devices/${encodeURIComponent(button.dataset.deviceMac)}/maintenance`, {
-              maintenance_mode: true,
-              reason: 'maintenance from /admin'
+              maintenance_mode: button.dataset.maintenanceMode === 'true',
+              reason: button.dataset.maintenanceReason || 'changed from /admin'
             });
-          } else {
-            const body = action === 'mute' ? { duration: '1h', reason: 'muted from /admin' } : {};
-            await postJSON(`/api/admin/health-alerts/${encodeURIComponent(alertKey)}/${action}`, body);
           }
           statusLine.textContent = `Alert ${action} completed`;
         }
@@ -271,7 +267,8 @@
       `).join('') || '<tr><td colspan="9" class="muted">No collector status rows.</td></tr>';
     }
 
-    function renderAlerts(items) {
+    function renderAlerts(items, devices) {
+      const deviceMap = new Map(devices.map(device => [device.mac, device]));
       document.querySelector('#alerts').innerHTML = items.map(item => `
         <tr data-alert-key="${escapeHTML(item.alert_key)}">
           <td>${pill(item.status)}</td>
@@ -281,39 +278,26 @@
           <td>${escapeHTML(item.summary)}</td>
           <td>${time(item.updated_at)}<div class="muted">${age(item.updated_at)}</div></td>
           <td>${time(item.last_notified_at)}</td>
-          <td>${renderAlertState(item)}</td>
           <td>
             <div class="actions">
-              <button data-alert-action="ack" data-alert-key="${escapeHTML(item.alert_key)}">Ack</button>
-              <button data-alert-action="mute" data-alert-key="${escapeHTML(item.alert_key)}">Mute 1h</button>
-              <button data-alert-action="resolve" data-alert-key="${escapeHTML(item.alert_key)}">Resolve</button>
-              ${maintenanceButton(item)}
+              ${maintenanceButton(item, deviceMap)}
               <button data-test-alert="${escapeHTML(item.alert_key)}">Test webhook</button>
             </div>
           </td>
         </tr>
-      `).join('') || '<tr><td colspan="9" class="muted">No health alerts.</td></tr>';
+      `).join('') || '<tr><td colspan="8" class="muted">No health alerts.</td></tr>';
       focusDeepLinkedAlert();
     }
 
-    function maintenanceButton(item) {
+    function maintenanceButton(item, deviceMap) {
       const mac = item.labels?.kind === 'sensor' ? item.labels.mac : '';
       if (!mac) return '';
-      return `<button data-alert-action="maintenance" data-alert-key="${escapeHTML(item.alert_key)}" data-device-mac="${escapeHTML(mac)}">Maintenance</button>`;
-    }
-
-    function renderAlertState(item) {
-      const parts = [];
-      if (item.acknowledged_at) {
-        parts.push(`Ack: ${time(item.acknowledged_at)}${item.acknowledged_by ? ` by ${escapeHTML(item.acknowledged_by)}` : ''}`);
-      }
-      if (item.muted_until) {
-        parts.push(`Muted until: ${time(item.muted_until)}${item.muted_by ? ` by ${escapeHTML(item.muted_by)}` : ''}`);
-      }
-      if (item.manually_resolved_at) {
-        parts.push(`Manual resolve: ${time(item.manually_resolved_at)}${item.manually_resolved_by ? ` by ${escapeHTML(item.manually_resolved_by)}` : ''}`);
-      }
-      return parts.length ? parts.map(part => `<div class="muted">${part}</div>`).join('') : '-';
+      const device = deviceMap.get(mac);
+      const inMaintenance = device?.maintenance_mode === true;
+      const label = inMaintenance ? 'Resume monitoring' : 'Pause monitoring';
+      const nextMode = inMaintenance ? 'false' : 'true';
+      const reason = inMaintenance ? '' : 'maintenance from /admin';
+      return `<button data-alert-action="maintenance" data-device-mac="${escapeHTML(mac)}" data-maintenance-mode="${nextMode}" data-maintenance-reason="${escapeHTML(reason)}">${label}</button>`;
     }
 
     function renderEvents(items) {
@@ -333,19 +317,20 @@
       statusLine.textContent = 'Loading';
       statusLine.className = 'muted';
       try {
-        const [summary, cisco, schema, collectors, alerts, events] = await Promise.all([
+        const [summary, cisco, schema, collectors, alerts, events, devices] = await Promise.all([
           getJSON('/api/health/details'),
           getJSON('/api/admin/cisco-spaces-firehose'),
           getJSON('/api/admin/schema'),
           getJSON('/api/admin/collector-status'),
           getJSON('/api/admin/health-alerts'),
           getJSON('/api/admin/health-notification-events'),
+          getJSON('/api/devices'),
         ]);
         renderSummary(summary);
         renderCiscoFirehose(cisco);
         renderSchema(schema);
         renderCollectors(collectors);
-        renderAlerts(alerts);
+        renderAlerts(alerts, devices);
         renderEvents(events);
         statusLine.textContent = `Loaded ${new Date().toLocaleString()}`;
       } catch (err) {
