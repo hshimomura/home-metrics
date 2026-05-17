@@ -250,3 +250,20 @@ func TestAppendFailureContext(t *testing.T) {
 		t.Fatalf("summary without failures = %q", got)
 	}
 }
+
+func TestEnergyFreshnessTimePrefersInsertedAt(t *testing.T) {
+	now := time.Date(2026, 5, 17, 9, 0, 0, 0, time.UTC)
+	measurementAt := pgtype.Timestamptz{Time: now.Add(-2 * time.Hour), Valid: true}
+	insertedAt := pgtype.Timestamptz{Time: now.Add(-1 * time.Minute), Valid: true}
+	if got := energyFreshnessTime(measurementAt, insertedAt); !got.Equal(insertedAt.Time) {
+		t.Fatalf("freshness time = %s, want inserted_at %s", got, insertedAt.Time)
+	}
+}
+
+func TestEnergyFreshnessTimeFallsBackToMeasurementAt(t *testing.T) {
+	now := time.Date(2026, 5, 17, 9, 0, 0, 0, time.UTC)
+	measurementAt := pgtype.Timestamptz{Time: now.Add(-2 * time.Minute), Valid: true}
+	if got := energyFreshnessTime(measurementAt, pgtype.Timestamptz{}); !got.Equal(measurementAt.Time) {
+		t.Fatalf("freshness time = %s, want measurement ts %s", got, measurementAt.Time)
+	}
+}

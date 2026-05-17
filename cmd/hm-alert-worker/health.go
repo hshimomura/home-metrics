@@ -541,7 +541,7 @@ func evaluateSensorFreshness(ctx context.Context, db *pgx.Conn, cfg healthConfig
 
 func evaluateEnergyFreshness(ctx context.Context, db *pgx.Conn, cfg healthConfig, now time.Time) ([]healthAlert, error) {
 	rows, err := db.Query(ctx, `
-		SELECT d.source, d.device_key, d.label, m.metric, max(r.ts)
+		SELECT d.source, d.device_key, d.label, m.metric, max(r.ts), max(r.inserted_at)
 		FROM energy_devices d
 		JOIN energy_metric_definitions m ON m.source = d.source AND m.enabled
 		LEFT JOIN energy_readings r
@@ -560,8 +560,8 @@ func evaluateEnergyFreshness(ctx context.Context, db *pgx.Conn, cfg healthConfig
 	var alerts []healthAlert
 	for rows.Next() {
 		var source, deviceKey, label, metric string
-		var latest pgtype.Timestamptz
-		if err := rows.Scan(&source, &deviceKey, &label, &metric, &latest); err != nil {
+		var latest, latestInserted pgtype.Timestamptz
+		if err := rows.Scan(&source, &deviceKey, &label, &metric, &latest, &latestInserted); err != nil {
 			return nil, err
 		}
 		key := healthKey("metric", "energy_readings", source, deviceKey, metric)
@@ -593,17 +593,25 @@ func evaluateEnergyFreshness(ctx context.Context, db *pgx.Conn, cfg healthConfig
 			})
 			continue
 		}
-		if now.Sub(latest.Time) > cfg.EnergyStaleAfter {
+		freshnessAt := energyFreshnessTime(latest, latestInserted)
+		timestamps := map[string]string{"last_data_at": freshnessAt.Format(time.RFC3339)}
+		if latestInserted.Valid {
+			timestamps["last_inserted_at"] = latestInserted.Time.Format(time.RFC3339)
+		}
+		if latest.Valid {
+			timestamps["last_measurement_at"] = latest.Time.Format(time.RFC3339)
+		}
+		if now.Sub(freshnessAt) > cfg.EnergyStaleAfter {
 			alerts = append(alerts, healthAlert{
 				Key:              key,
 				Status:           healthStatusFiring,
 				Severity:         "warning",
 				Title:            "Energy data stale",
 				Source:           alertSource,
-				Summary:          fmt.Sprintf("%s %s readings are stale for %s.", labelOrKey(label, deviceKey), metric, roundDuration(now.Sub(latest.Time))),
+				Summary:          fmt.Sprintf("%s %s readings are stale for %s.", labelOrKey(label, deviceKey), metric, roundDuration(now.Sub(freshnessAt))),
 				Labels:           labels,
 				Impact:           impact,
-				Timestamps:       map[string]string{"last_data_at": latest.Time.Format(time.RFC3339)},
+				Timestamps:       timestamps,
 				SuggestedActions: suggestedEnergyActions(source),
 			})
 			continue
@@ -619,6 +627,13 @@ func evaluateEnergyFreshness(ctx context.Context, db *pgx.Conn, cfg healthConfig
 		})
 	}
 	return alerts, rows.Err()
+}
+
+func energyFreshnessTime(measurementAt pgtype.Timestamptz, insertedAt pgtype.Timestamptz) time.Time {
+	if insertedAt.Valid {
+		return insertedAt.Time
+	}
+	return measurementAt.Time
 }
 
 func applyHealthAlert(ctx context.Context, db *pgx.Conn, notifier healthNotifier, cfg healthConfig, alert healthAlert, now time.Time) error {
