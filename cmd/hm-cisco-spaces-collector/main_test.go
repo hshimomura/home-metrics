@@ -66,6 +66,48 @@ func TestProcessEventSkipsSentinelsAndConflictingIDs(t *testing.T) {
 	}
 }
 
+func TestProcessEventRejectsCiscoSpacesTemperatureOutliers(t *testing.T) {
+	cfg := config{
+		SampleWindow:   1,
+		FieldFreshness: time.Minute,
+		UploadInterval: time.Minute,
+		BatteryMode:    "all",
+	}
+	p := newProcessor(cfg)
+
+	event := testEvent(1_700_000_000_000, "aa:bb:cc:dd:ee:ff")
+	event.IOTTelemetry.Temperature = &temperatureData{TemperatureC: -45}
+	event.IOTTelemetry.Humidity = &humidityData{HumidityPercent: 99}
+	event.IOTTelemetry.Battery = &batteryData{Value: 90}
+	got, ok, _, err := p.processEvent(event)
+	if err != nil {
+		t.Fatalf("process event: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected battery-only reading")
+	}
+	if got.TemperatureC != nil {
+		t.Fatalf("temperature = %v, want nil", *got.TemperatureC)
+	}
+	if got.HumidityPercent != nil {
+		t.Fatalf("humidity = %v, want nil", *got.HumidityPercent)
+	}
+	assertPtr(t, "battery", got.BatteryPercent, 90)
+
+	event = testEvent(1_700_000_060_000, "aa:bb:cc:dd:ee:ff")
+	event.IOTTelemetry.Temperature = &temperatureData{TemperatureC: 24.5}
+	event.IOTTelemetry.Humidity = &humidityData{HumidityPercent: 99}
+	got, ok, _, err = p.processEvent(event)
+	if err != nil {
+		t.Fatalf("process normal event: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected normal reading")
+	}
+	assertPtr(t, "temperature", got.TemperatureC, 24.5)
+	assertPtr(t, "humidity", got.HumidityPercent, 99)
+}
+
 func TestProcessEventParsesReferenceShape(t *testing.T) {
 	const raw = `{
 		"eventType": "IOT_TELEMETRY",

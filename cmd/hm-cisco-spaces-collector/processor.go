@@ -86,10 +86,15 @@ func (p *processor) debugWindows(mac string) string {
 
 func (p *processor) extractValues(mac string, item telemetry) []metricValue {
 	var values []metricValue
+	temperatureInvalid := false
 	if item.Temperature != nil && item.Temperature.TemperatureC != 0 {
-		values = append(values, metricValue{Metric: metricTemperature, Value: item.Temperature.TemperatureC})
+		if validCiscoSpacesTemperature(item.Temperature.TemperatureC) {
+			values = append(values, metricValue{Metric: metricTemperature, Value: item.Temperature.TemperatureC})
+		} else {
+			temperatureInvalid = true
+		}
 	}
-	if item.Humidity != nil && item.Humidity.HumidityPercent != 255 {
+	if item.Humidity != nil && validCiscoSpacesHumidity(item.Humidity.HumidityPercent, temperatureInvalid) {
 		values = append(values, metricValue{Metric: metricHumidity, Value: item.Humidity.HumidityPercent})
 	}
 	if item.AirPressure != nil && item.AirPressure.Pressure != 0 {
@@ -108,6 +113,20 @@ func (p *processor) extractValues(mac string, item telemetry) []metricValue {
 		values = append(values, metricValue{Metric: metricETVOC, Value: item.TVOC.ValueInPPB / 1000})
 	}
 	return values
+}
+
+func validCiscoSpacesTemperature(value float64) bool {
+	return value >= -20 && value <= 60
+}
+
+func validCiscoSpacesHumidity(value float64, temperatureInvalid bool) bool {
+	if value == 255 {
+		return false
+	}
+	if temperatureInvalid && value == 99 {
+		return false
+	}
+	return value >= 0 && value <= 100
 }
 
 func (p *processor) acceptBattery(mac string) bool {
