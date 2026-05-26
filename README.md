@@ -257,6 +257,11 @@ exponential backoff で再接続します。温度、湿度、気圧、CO2、照
 は 5 sample median を使い、既知の sentinel 値は保存しません。Firehose の
 `tvoc.valueInPpb` は既存BLE importer の eTVOC と同じ表示単位に合わせるため
 1000 で割って保存します。
+Cisco Spaces Indoor IoT sensor では、温度だけが短時間で大きく低下してすぐ戻る
+payload が観測されています。raw JSON は `cisco_spaces_raw_events` に保持したまま、
+normalized `sensor_minute` へ入れる前に、直近の accepted temperature より 3°C
+以上低い短時間値を workaround として除外します。これは TAC/debug 用 raw 保存には
+影響しません。
 `CISCO_SPACES_STREAM_HEARTBEAT` は Firehose 接続中に collector liveness を
 `collector_status` へ記録する間隔です。telemetry が保存された時刻は
 `last_data_at` として別に記録されます。

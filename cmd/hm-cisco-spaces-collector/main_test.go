@@ -108,6 +108,61 @@ func TestProcessEventRejectsCiscoSpacesTemperatureOutliers(t *testing.T) {
 	assertPtr(t, "humidity", got.HumidityPercent, 99)
 }
 
+func TestProcessEventRejectsShortLivedCiscoSpacesTemperatureDrops(t *testing.T) {
+	cfg := config{
+		SampleWindow:   5,
+		FieldFreshness: time.Minute,
+		UploadInterval: 0,
+		BatteryMode:    "all",
+	}
+	p := newProcessor(cfg)
+	mac := "aa:bb:cc:dd:ee:ff"
+	baseTS := int64(1_700_000_000_000)
+
+	var got sensorReading
+	var ok bool
+	for i, temp := range []float64{28.70, 28.72, 28.73, 28.74, 28.73} {
+		event := testEvent(baseTS+int64(i)*1_000, mac)
+		event.IOTTelemetry.Temperature = &temperatureData{TemperatureC: temp}
+		var err error
+		got, ok, _, err = p.processEvent(event)
+		if err != nil {
+			t.Fatalf("process normal event %d: %v", i, err)
+		}
+	}
+	if !ok {
+		t.Fatal("expected normal baseline reading")
+	}
+	assertPtr(t, "baseline temperature", got.TemperatureC, 28.73)
+
+	for i, temp := range []float64{18.55, 19.96, 21.17, 23.11, 24.56} {
+		event := testEvent(baseTS+60_000+int64(i)*1_000, mac)
+		event.IOTTelemetry.Temperature = &temperatureData{TemperatureC: temp}
+		event.IOTTelemetry.Humidity = &humidityData{HumidityPercent: 57}
+		var err error
+		got, ok, _, err = p.processEvent(event)
+		if err != nil {
+			t.Fatalf("process dropped event %d: %v", i, err)
+		}
+	}
+	if !ok {
+		t.Fatal("expected reading with previous temperature")
+	}
+	assertPtr(t, "temperature after short drop", got.TemperatureC, 28.73)
+	assertPtr(t, "humidity after short drop", got.HumidityPercent, 57)
+
+	event := testEvent(baseTS+70_000, mac)
+	event.IOTTelemetry.Temperature = &temperatureData{TemperatureC: 28.66}
+	got, ok, _, err := p.processEvent(event)
+	if err != nil {
+		t.Fatalf("process recovered event: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected recovered reading")
+	}
+	assertPtr(t, "recovered temperature", got.TemperatureC, 28.73)
+}
+
 func TestProcessEventParsesReferenceShape(t *testing.T) {
 	const raw = `{
 		"eventType": "IOT_TELEMETRY",

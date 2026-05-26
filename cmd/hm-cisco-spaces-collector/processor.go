@@ -88,7 +88,8 @@ func (p *processor) extractValues(mac string, item telemetry) []metricValue {
 	var values []metricValue
 	temperatureInvalid := false
 	if item.Temperature != nil && item.Temperature.TemperatureC != 0 {
-		if validCiscoSpacesTemperature(item.Temperature.TemperatureC) {
+		if validCiscoSpacesTemperature(item.Temperature.TemperatureC) &&
+			p.validCiscoSpacesTemperatureStep(mac, item.Temperature.TemperatureC) {
 			values = append(values, metricValue{Metric: metricTemperature, Value: item.Temperature.TemperatureC})
 		} else {
 			temperatureInvalid = true
@@ -117,6 +118,23 @@ func (p *processor) extractValues(mac string, item telemetry) []metricValue {
 
 func validCiscoSpacesTemperature(value float64) bool {
 	return value >= -20 && value <= 60
+}
+
+func (p *processor) validCiscoSpacesTemperatureStep(mac string, value float64) bool {
+	fields := p.lastMetrics[mac]
+	if fields == nil {
+		return true
+	}
+	last, ok := fields[metricTemperature]
+	if !ok {
+		return true
+	}
+
+	// Cisco Spaces Indoor IoT sensors can occasionally emit a short-lived
+	// low temperature burst while humidity/battery remain otherwise plausible.
+	// Keep the raw JSON, but do not feed that burst into the normalized
+	// rolling window for indoor metrics.
+	return value >= last.Value-3
 }
 
 func validCiscoSpacesHumidity(value float64, temperatureInvalid bool) bool {

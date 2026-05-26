@@ -121,6 +121,12 @@ best effort で抽出する。存在しない path は `NULL` にする。
 processor 分離後も、正規化処理はまず `payload` を入力にする。抽出済み metadata は
 query / filter / export の補助として使い、metric 計算の唯一の入力にはしない。
 
+運用上の workaround として、Cisco Spaces Indoor IoT sensor の normalized
+temperature には短時間急落フィルタを入れている。raw JSON は保存したまま、
+`sensor_minute` へ入れる前に、直近 accepted temperature より 3°C 以上低い値を
+除外する。これは 2026-05 に Desk sensor で観測された、数十秒だけ 10°C 近く低下し
+すぐ復帰する payload への対策であり、raw export / TAC 用データは改変しない。
+
 ### index
 
 最初は最小限にする。
