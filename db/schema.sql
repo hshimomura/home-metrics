@@ -13,9 +13,6 @@ CREATE TABLE IF NOT EXISTS devices (
     sensor_category text,
     location text,
     enabled boolean NOT NULL DEFAULT true,
-    maintenance_mode boolean NOT NULL DEFAULT false,
-    maintenance_reason text,
-    maintenance_since timestamptz,
     created_at timestamptz NOT NULL DEFAULT now(),
     updated_at timestamptz NOT NULL DEFAULT now()
 );
@@ -100,85 +97,6 @@ SELECT create_hypertable('sensor_1day', 'ts', if_not_exists => true);
 CREATE INDEX IF NOT EXISTS sensor_1day_mac_ts_desc_idx
     ON sensor_1day (mac, ts DESC);
 
-CREATE TABLE IF NOT EXISTS app_users (
-    id bigserial PRIMARY KEY,
-    display_name text NOT NULL DEFAULT 'default',
-    created_at timestamptz NOT NULL DEFAULT now(),
-    updated_at timestamptz NOT NULL DEFAULT now()
-);
-
-CREATE TABLE IF NOT EXISTS ios_devices (
-    id bigserial PRIMARY KEY,
-    user_id bigint NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
-    apns_device_token text NOT NULL,
-    app_bundle_id text NOT NULL,
-    apns_environment text NOT NULL CHECK (apns_environment IN ('sandbox', 'production')),
-    device_name text,
-    enabled boolean NOT NULL DEFAULT true,
-    disabled_reason text,
-    disabled_at timestamptz,
-    last_seen_at timestamptz,
-    created_at timestamptz NOT NULL DEFAULT now(),
-    updated_at timestamptz NOT NULL DEFAULT now(),
-    UNIQUE (apns_device_token, app_bundle_id, apns_environment)
-);
-
-CREATE TABLE IF NOT EXISTS alert_rules (
-    id bigserial PRIMARY KEY,
-    user_id bigint NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
-    mac text NOT NULL REFERENCES devices(mac),
-    metric text NOT NULL CHECK (
-        metric IN (
-            'temperature_c',
-            'humidity_percent',
-            'battery_percent',
-            'rssi_dbm',
-            'pressure_hpa',
-            'co2_ppm',
-            'lux',
-            'etvoc'
-        )
-    ),
-    operator text NOT NULL CHECK (operator IN ('>', '>=', '<', '<=')),
-    threshold double precision NOT NULL,
-    cooldown_duration interval NOT NULL DEFAULT interval '24 hours',
-    enabled boolean NOT NULL DEFAULT true,
-    created_at timestamptz NOT NULL DEFAULT now(),
-    updated_at timestamptz NOT NULL DEFAULT now()
-);
-
-CREATE INDEX IF NOT EXISTS alert_rules_enabled_metric_idx
-    ON alert_rules (enabled, mac, metric);
-
-CREATE TABLE IF NOT EXISTS alert_rule_state (
-    alert_rule_id bigint PRIMARY KEY REFERENCES alert_rules(id) ON DELETE CASCADE,
-    last_triggered_at timestamptz,
-    last_notified_at timestamptz,
-    last_value double precision,
-    updated_at timestamptz NOT NULL DEFAULT now()
-);
-
-CREATE TABLE IF NOT EXISTS notification_events (
-    id bigserial PRIMARY KEY,
-    alert_rule_id bigint REFERENCES alert_rules(id) ON DELETE SET NULL,
-    user_id bigint REFERENCES app_users(id) ON DELETE SET NULL,
-    mac text NOT NULL REFERENCES devices(mac),
-    metric text NOT NULL,
-    value double precision,
-    threshold double precision,
-    triggered_at timestamptz NOT NULL,
-    sent_at timestamptz,
-    status text NOT NULL CHECK (status IN ('pending', 'dry_run', 'sent', 'failed', 'skipped')),
-    error_message text,
-    created_at timestamptz NOT NULL DEFAULT now()
-);
-
-CREATE INDEX IF NOT EXISTS notification_events_user_created_idx
-    ON notification_events (user_id, created_at DESC);
-
-CREATE INDEX IF NOT EXISTS notification_events_rule_created_idx
-    ON notification_events (alert_rule_id, created_at DESC);
-
 CREATE TABLE IF NOT EXISTS collector_status (
     collector_name text NOT NULL,
     target_type text NOT NULL,
@@ -193,62 +111,6 @@ CREATE TABLE IF NOT EXISTS collector_status (
     updated_at timestamptz NOT NULL DEFAULT now(),
     PRIMARY KEY (collector_name, target_type, target_key)
 );
-
-CREATE TABLE IF NOT EXISTS health_alert_state (
-    alert_key text PRIMARY KEY,
-    status text NOT NULL CHECK (status IN ('firing', 'resolved')),
-    severity text NOT NULL CHECK (severity IN ('info', 'warning', 'critical')),
-    title text NOT NULL,
-    source text NOT NULL,
-    summary text NOT NULL,
-    labels jsonb NOT NULL DEFAULT '{}'::jsonb,
-    first_fired_at timestamptz,
-    last_evaluated_at timestamptz NOT NULL,
-    last_notified_at timestamptz,
-    acknowledged_at timestamptz,
-    acknowledged_by text,
-    muted_until timestamptz,
-    muted_by text,
-    muted_reason text,
-    manually_resolved_at timestamptz,
-    manually_resolved_by text,
-    resolved_at timestamptz,
-    updated_at timestamptz NOT NULL DEFAULT now()
-);
-
-CREATE INDEX IF NOT EXISTS health_alert_state_status_updated_idx
-    ON health_alert_state (status, updated_at DESC);
-
-CREATE TABLE IF NOT EXISTS admin_notification_channels (
-    id bigserial PRIMARY KEY,
-    channel_type text NOT NULL CHECK (channel_type IN ('generic_webhook')),
-    name text NOT NULL,
-    enabled boolean NOT NULL DEFAULT true,
-    target text,
-    secret_ref text,
-    config jsonb NOT NULL DEFAULT '{}'::jsonb,
-    created_at timestamptz NOT NULL DEFAULT now(),
-    updated_at timestamptz NOT NULL DEFAULT now()
-);
-
-CREATE TABLE IF NOT EXISTS health_notification_events (
-    id bigserial PRIMARY KEY,
-    event_id text NOT NULL UNIQUE,
-    alert_key text NOT NULL REFERENCES health_alert_state(alert_key) ON DELETE CASCADE,
-    channel_id bigint REFERENCES admin_notification_channels(id) ON DELETE SET NULL,
-    channel_type text NOT NULL,
-    status text NOT NULL CHECK (status IN ('pending', 'dry_run', 'sent', 'failed', 'skipped')),
-    http_status integer,
-    response_body text,
-    error text,
-    created_at timestamptz NOT NULL DEFAULT now()
-);
-
-CREATE INDEX IF NOT EXISTS health_notification_events_alert_created_idx
-    ON health_notification_events (alert_key, created_at DESC);
-
-CREATE INDEX IF NOT EXISTS health_notification_events_status_created_idx
-    ON health_notification_events (status, created_at DESC);
 
 CREATE TABLE IF NOT EXISTS cisco_spaces_raw_events (
     received_at timestamptz NOT NULL DEFAULT now(),
@@ -319,17 +181,6 @@ CREATE TABLE IF NOT EXISTS energy_metric_definitions (
     created_at timestamptz NOT NULL DEFAULT now(),
     updated_at timestamptz NOT NULL DEFAULT now(),
     PRIMARY KEY (source, metric)
-);
-
-INSERT INTO app_users (id, display_name)
-VALUES (1, 'default')
-ON CONFLICT (id) DO UPDATE SET
-    display_name = EXCLUDED.display_name,
-    updated_at = now();
-
-SELECT setval(
-    pg_get_serial_sequence('app_users', 'id'),
-    GREATEST((SELECT max(id) FROM app_users), 1)
 );
 
 INSERT INTO energy_metric_definitions (

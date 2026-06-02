@@ -76,7 +76,6 @@ func pruneConfiguredBLESensors(ctx context.Context, db *pgx.Conn, path string) e
 				AND NOT EXISTS (SELECT 1 FROM sensor_1hour s WHERE s.mac = d.mac)
 				AND NOT EXISTS (SELECT 1 FROM sensor_12hour s WHERE s.mac = d.mac)
 				AND NOT EXISTS (SELECT 1 FROM sensor_1day s WHERE s.mac = d.mac)
-				AND NOT EXISTS (SELECT 1 FROM alert_rules r WHERE r.mac = d.mac)
 		`, mac)
 		if err != nil {
 			return fmt.Errorf("delete configured BLE sensor %s: %w", mac, err)

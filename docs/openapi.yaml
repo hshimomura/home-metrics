@@ -2,670 +2,290 @@ openapi: 3.1.0
 info:
   title: Home Metrics API
   version: 1.0.0
-  description: REST API served by hm-api-server for sensor, energy, alert, and iOS device data.
-  license:
-    name: MIT
-    identifier: MIT
+  description: REST API served by hm-api-server for sensor, energy, and collector status data.
 servers:
-  - url: /
+  - url: http://localhost:8080
 security:
   - bearerAuth: []
-  - apiTokenHeader: []
+  - apiToken: []
 paths:
   /api/health:
     get:
-      operationId: getHealth
-      summary: Check API and database health
+      summary: Health check
       security: []
       responses:
-        '200':
-          description: API is healthy
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/HealthResponse'
-        '503':
-          $ref: '#/components/responses/Error'
-        '4XX':
-          $ref: '#/components/responses/Error'
-  /api/devices:
-    get:
-      operationId: listDevices
-      summary: List BLE sensor devices
-      responses:
-        '200':
-          description: Device list
-          content:
-            application/json:
-              schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/Device'
-        '401':
-          $ref: '#/components/responses/Error'
-        '500':
-          $ref: '#/components/responses/Error'
-  /api/devices/{mac}/latest:
-    get:
-      operationId: getDeviceLatest
-      summary: Get latest BLE sensor values
-      parameters:
-        - $ref: '#/components/parameters/MacPath'
-      responses:
-        '200':
-          description: Latest sensor values
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/LatestTelemetry'
-        '401':
-          $ref: '#/components/responses/Error'
-        '404':
-          $ref: '#/components/responses/Error'
-        '500':
-          $ref: '#/components/responses/Error'
-  /api/devices/{mac}/series:
-    get:
-      operationId: getDeviceSeries
-      summary: Get BLE sensor time series
-      parameters:
-        - $ref: '#/components/parameters/MacPath'
-        - name: metric
-          in: query
-          required: true
-          schema:
-            $ref: '#/components/schemas/SensorMetric'
-        - $ref: '#/components/parameters/RangeQuery'
-      responses:
-        '200':
-          description: Sensor time series
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/SensorSeries'
-        '400':
-          $ref: '#/components/responses/Error'
-        '401':
-          $ref: '#/components/responses/Error'
-        '500':
-          $ref: '#/components/responses/Error'
-  /api/energy/latest:
-    get:
-      operationId: getEnergyLatest
-      summary: Get latest energy and UPS readings
-      parameters:
-        - name: source
-          in: query
-          required: false
-          schema:
-            type: string
-        - name: device_key
-          in: query
-          required: false
-          schema:
-            type: string
-      responses:
-        '200':
-          description: Latest energy readings
-          content:
-            application/json:
-              schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/EnergyReading'
-        '400':
-          $ref: '#/components/responses/Error'
-        '401':
-          $ref: '#/components/responses/Error'
-        '500':
-          $ref: '#/components/responses/Error'
-  /api/energy/series:
-    get:
-      operationId: getEnergySeries
-      summary: Get energy and UPS time series
-      parameters:
-        - name: source
-          in: query
-          required: true
-          schema:
-            type: string
-        - name: device_key
-          in: query
-          required: true
-          schema:
-            type: string
-        - name: metric
-          in: query
-          required: true
-          schema:
-            type: string
-        - $ref: '#/components/parameters/RangeQuery'
-      responses:
-        '200':
-          description: Energy time series
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/EnergySeries'
-        '400':
-          $ref: '#/components/responses/Error'
-        '401':
-          $ref: '#/components/responses/Error'
-        '404':
-          $ref: '#/components/responses/Error'
-        '500':
-          $ref: '#/components/responses/Error'
-  /api/alert-rules:
-    get:
-      operationId: listAlertRules
-      summary: List alert rules
-      responses:
-        '200':
-          description: Alert rule list
-          content:
-            application/json:
-              schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/AlertRule'
-        '401':
-          $ref: '#/components/responses/Error'
-        '500':
-          $ref: '#/components/responses/Error'
-    post:
-      operationId: createAlertRule
-      summary: Create an alert rule
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/AlertRuleRequest'
-      responses:
-        '201':
-          description: Created alert rule
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/AlertRule'
-        '400':
-          $ref: '#/components/responses/Error'
-        '401':
-          $ref: '#/components/responses/Error'
-        '500':
-          $ref: '#/components/responses/Error'
-  /api/alert-rules/{id}:
-    put:
-      operationId: updateAlertRule
-      summary: Replace an alert rule
-      parameters:
-        - $ref: '#/components/parameters/IdPath'
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/AlertRuleRequest'
-      responses:
-        '200':
-          description: Updated alert rule
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/AlertRule'
-        '400':
-          $ref: '#/components/responses/Error'
-        '401':
-          $ref: '#/components/responses/Error'
-        '404':
-          $ref: '#/components/responses/Error'
-        '500':
-          $ref: '#/components/responses/Error'
-    delete:
-      operationId: deleteAlertRule
-      summary: Delete an alert rule
-      parameters:
-        - $ref: '#/components/parameters/IdPath'
-      responses:
-        '204':
-          description: Deleted
-        '400':
-          $ref: '#/components/responses/Error'
-        '401':
-          $ref: '#/components/responses/Error'
-        '404':
-          $ref: '#/components/responses/Error'
-        '500':
-          $ref: '#/components/responses/Error'
-  /api/alert-rules/{id}/reset-cooldown:
-    post:
-      operationId: resetAlertRuleCooldown
-      summary: Reset an alert rule cooldown state
-      parameters:
-        - $ref: '#/components/parameters/IdPath'
-      responses:
-        '204':
-          description: Reset
-        '400':
-          $ref: '#/components/responses/Error'
-        '401':
-          $ref: '#/components/responses/Error'
-        '404':
-          $ref: '#/components/responses/Error'
-        '500':
-          $ref: '#/components/responses/Error'
-  /api/notification-events:
-    get:
-      operationId: listNotificationEvents
-      summary: List notification events
-      parameters:
-        - name: limit
-          in: query
-          required: false
-          schema:
-            type: integer
-            minimum: 1
-            maximum: 500
-            default: 50
-        - name: status
-          in: query
-          required: false
-          schema:
-            $ref: '#/components/schemas/NotificationStatus'
-        - name: mac
-          in: query
-          required: false
-          schema:
-            type: string
-        - name: alert_rule_id
-          in: query
-          required: false
-          schema:
-            type: integer
-      responses:
-        '200':
-          description: Notification events
-          content:
-            application/json:
-              schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/NotificationEvent'
-        '400':
-          $ref: '#/components/responses/Error'
-        '401':
-          $ref: '#/components/responses/Error'
-        '500':
-          $ref: '#/components/responses/Error'
-    delete:
-      operationId: deleteNotificationEvents
-      summary: Delete all notification events for the current user
-      responses:
-        '204':
-          description: Deleted
-        '401':
-          $ref: '#/components/responses/Error'
-        '500':
-          $ref: '#/components/responses/Error'
+        "200":
+          description: Database is reachable
   /api/health/details:
     get:
-      operationId: getHealthDetails
-      summary: Get backend health summary
+      summary: Collector health summary
       responses:
-        '200':
-          description: Backend health summary
+        "200":
+          description: Collector summary
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/HealthDetails'
-        '401':
-          $ref: '#/components/responses/Error'
-        '500':
-          $ref: '#/components/responses/Error'
-        '503':
-          $ref: '#/components/responses/Error'
-  /api/admin/schema:
+                $ref: "#/components/schemas/HealthDetails"
+  /api/devices:
     get:
-      operationId: getAdminSchema
-      summary: Get applied database schema migrations
+      summary: List sensor devices
       responses:
-        '200':
-          description: Schema migration status
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/SchemaStatus'
-        '401':
-          $ref: '#/components/responses/Error'
-        '500':
-          $ref: '#/components/responses/Error'
-  /api/admin/cisco-spaces-firehose:
-    get:
-      operationId: getCiscoSpacesFirehoseStatus
-      summary: Get Cisco Spaces Firehose advisory lock status
-      responses:
-        '200':
-          description: Cisco Spaces Firehose status
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/CiscoSpacesFirehoseStatus'
-        '401':
-          $ref: '#/components/responses/Error'
-        '500':
-          $ref: '#/components/responses/Error'
-  /api/admin/collector-status:
-    get:
-      operationId: listCollectorStatus
-      summary: List collector self-reported status rows
-      responses:
-        '200':
-          description: Collector status list
+        "200":
+          description: Sensor devices
           content:
             application/json:
               schema:
                 type: array
                 items:
-                  $ref: '#/components/schemas/CollectorStatus'
-        '401':
-          $ref: '#/components/responses/Error'
-        '500':
-          $ref: '#/components/responses/Error'
-  /api/admin/health-alerts:
+                  $ref: "#/components/schemas/Device"
+  /api/devices/{mac}/latest:
     get:
-      operationId: listHealthAlerts
-      summary: List backend health alerts
+      summary: Latest sensor values
       parameters:
-        - name: status
+        - $ref: "#/components/parameters/Mac"
+      responses:
+        "200":
+          description: Latest values
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LatestSensor"
+  /api/devices/{mac}/series:
+    get:
+      summary: Sensor series
+      parameters:
+        - $ref: "#/components/parameters/Mac"
+        - name: metric
           in: query
-          required: false
+          required: true
+          schema:
+            $ref: "#/components/schemas/SensorMetric"
+        - name: range
+          in: query
+          schema:
+            $ref: "#/components/schemas/Range"
+      responses:
+        "200":
+          description: Sensor series
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SensorSeries"
+  /api/energy/latest:
+    get:
+      summary: Latest energy values
+      parameters:
+        - name: source
+          in: query
           schema:
             type: string
-            enum: [firing, resolved]
+        - name: device_key
+          in: query
+          schema:
+            type: string
       responses:
-        '200':
-          description: Health alert list
+        "200":
+          description: Energy latest readings
           content:
             application/json:
               schema:
                 type: array
                 items:
-                  $ref: '#/components/schemas/HealthAlert'
-        '400':
-          $ref: '#/components/responses/Error'
-        '401':
-          $ref: '#/components/responses/Error'
-        '500':
-          $ref: '#/components/responses/Error'
-  /api/admin/devices/{mac}/maintenance:
-    post:
-      operationId: setDeviceMaintenance
-      summary: Set or clear device maintenance mode for health monitoring
-      parameters:
-        - $ref: '#/components/parameters/MacPath'
-      requestBody:
-        required: false
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/HealthAlertOperationRequest'
-      responses:
-        '200':
-          description: Updated device
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Device'
-        '400':
-          $ref: '#/components/responses/Error'
-        '401':
-          $ref: '#/components/responses/Error'
-        '404':
-          $ref: '#/components/responses/Error'
-        '500':
-          $ref: '#/components/responses/Error'
-  /api/admin/health-alerts/{alert_key}/test-webhook:
-    post:
-      operationId: testHealthAlertWebhook
-      summary: Send a test admin webhook for a backend health alert
-      parameters:
-        - $ref: '#/components/parameters/AlertKeyPath'
-      responses:
-        '200':
-          description: Test webhook result
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/TestHealthWebhookResponse'
-        '401':
-          $ref: '#/components/responses/Error'
-        '404':
-          $ref: '#/components/responses/Error'
-        '500':
-          $ref: '#/components/responses/Error'
-        '502':
-          $ref: '#/components/responses/Error'
-        '503':
-          $ref: '#/components/responses/Error'
-  /api/admin/health-notification-events:
+                  $ref: "#/components/schemas/EnergyLatest"
+  /api/energy/series:
     get:
-      operationId: listHealthNotificationEvents
-      summary: List backend health webhook delivery events
+      summary: Energy series
+      parameters:
+        - name: source
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: device_key
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: metric
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: range
+          in: query
+          schema:
+            $ref: "#/components/schemas/Range"
       responses:
-        '200':
-          description: Health notification event list
+        "200":
+          description: Energy series
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/HealthNotificationEvent'
-        '401':
-          $ref: '#/components/responses/Error'
-        '500':
-          $ref: '#/components/responses/Error'
-    delete:
-      operationId: deleteHealthNotificationEvents
-      summary: Clear backend health webhook delivery history
-      description: Deletes health_notification_events only. It does not delete health_alert_state or user notification_events.
-      responses:
-        '204':
-          description: Webhook delivery history cleared
-        '401':
-          $ref: '#/components/responses/Error'
-        '500':
-          $ref: '#/components/responses/Error'
-  /api/ios/devices:
+                $ref: "#/components/schemas/EnergySeries"
+  /api/admin/collector-status:
     get:
-      operationId: listIOSDevices
-      summary: List registered iOS devices
+      summary: Collector status rows
       responses:
-        '200':
-          description: iOS device list
+        "200":
+          description: Collector status rows
           content:
             application/json:
               schema:
                 type: array
                 items:
-                  $ref: '#/components/schemas/IOSDevice'
-        '401':
-          $ref: '#/components/responses/Error'
-        '500':
-          $ref: '#/components/responses/Error'
-    post:
-      operationId: registerIOSDevice
-      summary: Register or update an iOS device token
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/IOSDeviceRequest'
+                  $ref: "#/components/schemas/CollectorStatus"
+  /api/admin/cisco-spaces-firehose:
+    get:
+      summary: Cisco Spaces firehose collector status
       responses:
-        '201':
-          description: Registered iOS device
+        "200":
+          description: Cisco Spaces firehose status
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/IOSDevice'
-        '400':
-          $ref: '#/components/responses/Error'
-        '401':
-          $ref: '#/components/responses/Error'
-        '500':
-          $ref: '#/components/responses/Error'
-  /api/ios/devices/{id}:
-    put:
-      operationId: updateIOSDevice
-      summary: Replace an iOS device registration
-      parameters:
-        - $ref: '#/components/parameters/IdPath'
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/IOSDeviceRequest'
+                $ref: "#/components/schemas/CiscoSpacesFirehoseStatus"
+  /api/admin/schema:
+    get:
+      summary: DB migration status
       responses:
-        '200':
-          description: Updated iOS device
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/IOSDevice'
-        '400':
-          $ref: '#/components/responses/Error'
-        '401':
-          $ref: '#/components/responses/Error'
-        '404':
-          $ref: '#/components/responses/Error'
-        '500':
-          $ref: '#/components/responses/Error'
-    delete:
-      operationId: deleteIOSDevice
-      summary: Delete an iOS device registration
-      parameters:
-        - $ref: '#/components/parameters/IdPath'
-      responses:
-        '204':
-          description: Deleted
-        '400':
-          $ref: '#/components/responses/Error'
-        '401':
-          $ref: '#/components/responses/Error'
-        '404':
-          $ref: '#/components/responses/Error'
-        '500':
-          $ref: '#/components/responses/Error'
-  /api/ios/devices/{id}/test-notification:
-    post:
-      operationId: testIOSDeviceNotification
-      summary: Send an APNs test notification to an iOS device
-      parameters:
-        - $ref: '#/components/parameters/IdPath'
-      responses:
-        '200':
-          description: Test notification result
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/TestNotificationResponse'
-        '400':
-          $ref: '#/components/responses/Error'
-        '401':
-          $ref: '#/components/responses/Error'
-        '404':
-          $ref: '#/components/responses/Error'
-        '500':
-          $ref: '#/components/responses/Error'
-        '502':
-          $ref: '#/components/responses/Error'
-        '503':
-          $ref: '#/components/responses/Error'
+        "200":
+          description: Applied migrations
 components:
   securitySchemes:
     bearerAuth:
       type: http
       scheme: bearer
-    apiTokenHeader:
+    apiToken:
       type: apiKey
       in: header
       name: X-API-Token
   parameters:
-    AlertKeyPath:
-      name: alert_key
-      in: path
-      required: true
-      schema:
-        type: string
-    IdPath:
-      name: id
-      in: path
-      required: true
-      schema:
-        type: integer
-    MacPath:
+    Mac:
       name: mac
       in: path
       required: true
       schema:
         type: string
-    RangeQuery:
-      name: range
-      in: query
-      required: false
-      schema:
-        $ref: '#/components/schemas/Range'
-  responses:
-    Error:
-      description: Error response
-      content:
-        application/json:
-          schema:
-            $ref: '#/components/schemas/ErrorResponse'
   schemas:
-    CiscoSpacesFirehoseStatus:
+    Range:
+      type: string
+      enum: [1d, 1w, 1m, 3m, 1y]
+      default: 1d
+    SensorMetric:
+      type: string
+      enum:
+        - temperature_c
+        - humidity_percent
+        - battery_percent
+        - rssi_dbm
+        - pressure_hpa
+        - co2_ppm
+        - lux
+        - etvoc
+    Device:
       type: object
-      required: [lock_key, lock_held, mode, configured_secondary_allowed, collector_status_present, collector_reporting, consecutive_failures]
+      required: [mac, label, enabled]
       properties:
-        lock_key:
+        mac:
+          type: string
+        label:
+          type: string
+        sensor_category:
+          type: string
+        location:
+          type: string
+        enabled:
+          type: boolean
+    LatestSensor:
+      type: object
+      required: [device, ts, values]
+      properties:
+        device:
+          $ref: "#/components/schemas/Device"
+        ts:
+          type: string
+          format: date-time
+        values:
+          type: object
+          additionalProperties:
+            type:
+              - number
+              - "null"
+    SeriesPoint:
+      type: object
+      required: [ts, value]
+      properties:
+        ts:
+          type: string
+          format: date-time
+        value:
+          type: number
+    SensorSeries:
+      type: object
+      required: [mac, metric, range, points]
+      properties:
+        mac:
+          type: string
+        metric:
+          $ref: "#/components/schemas/SensorMetric"
+        range:
+          $ref: "#/components/schemas/Range"
+        points:
+          type: array
+          items:
+            $ref: "#/components/schemas/SeriesPoint"
+    EnergyLatest:
+      type: object
+      required: [ts, source, device_key, metric, value]
+      properties:
+        ts:
+          type: string
+          format: date-time
+        source:
+          type: string
+        device_key:
+          type: string
+        label:
+          type: string
+        location:
+          type: string
+        metric:
+          type: string
+        value:
+          type: number
+        unit:
+          type: string
+    EnergySeries:
+      type: object
+      required: [source, device_key, metric, range, unit, points]
+      properties:
+        source:
+          type: string
+        device_key:
+          type: string
+        metric:
+          type: string
+        range:
+          $ref: "#/components/schemas/Range"
+        unit:
+          type: string
+        points:
+          type: array
+          items:
+            $ref: "#/components/schemas/SeriesPoint"
+    HealthDetails:
+      type: object
+      required: [status, database, collector_targets, stale_collectors]
+      properties:
+        status:
+          type: string
+          enum: [ok, degraded]
+        database:
+          type: string
+        collector_targets:
           type: integer
-          format: int64
-        lock_held:
-          type: boolean
-        lock_holder_pid:
+        stale_collectors:
           type: integer
-        mode:
-          type: string
-        configured_secondary_allowed:
-          type: boolean
-          description: API server view of CISCO_SPACES_ALLOW_SECONDARY.
-        collector_status_present:
-          type: boolean
-        collector_reporting:
-          type: boolean
-        collector_updated_at:
-          type: string
-          format: date-time
-        last_attempt_at:
-          type: string
-          format: date-time
-        last_success_at:
-          type: string
-          format: date-time
-        last_data_at:
-          type: string
-          format: date-time
-        first_failure_at:
-          type: string
-          format: date-time
-        last_failure_at:
-          type: string
-          format: date-time
-        consecutive_failures:
-          type: integer
-        last_error:
-          type: string
     CollectorStatus:
       type: object
       required: [collector_name, target_type, target_key, consecutive_failures, updated_at]
@@ -698,436 +318,50 @@ components:
         updated_at:
           type: string
           format: date-time
-    AlertOperator:
-      type: string
-      enum: ['>', '>=', '<', '<=']
-    AlertRule:
+    CiscoSpacesFirehoseStatus:
       type: object
-      required: [id, mac, metric, operator, threshold, cooldown_seconds, enabled]
+      required:
+        - lock_key
+        - lock_held
+        - mode
+        - configured_secondary_allowed
+        - collector_status_present
+        - collector_reporting
+        - consecutive_failures
       properties:
-        id:
+        lock_key:
           type: integer
-        user_id:
-          type: integer
-        mac:
-          type: string
-        metric:
-          $ref: '#/components/schemas/SensorMetric'
-        operator:
-          $ref: '#/components/schemas/AlertOperator'
-        threshold:
-          type: number
-        cooldown_seconds:
-          type: integer
-          default: 86400
-        enabled:
+        lock_held:
           type: boolean
-          default: true
-        last_notified_at:
-          type: string
-          format: date-time
-        last_value:
-          type: number
-        created_at:
-          type: string
-          format: date-time
-        updated_at:
-          type: string
-          format: date-time
-    AlertRuleRequest:
-      type: object
-      required: [mac, metric, operator, threshold]
-      properties:
-        mac:
-          type: string
-        metric:
-          $ref: '#/components/schemas/SensorMetric'
-        operator:
-          $ref: '#/components/schemas/AlertOperator'
-        threshold:
-          type: number
-        cooldown_seconds:
+        lock_holder_pid:
           type: integer
-          minimum: 0
-          default: 86400
-        enabled:
+        mode:
+          type: string
+        configured_secondary_allowed:
           type: boolean
-          default: true
-    Device:
-      type: object
-      required: [mac, label, enabled, maintenance_mode]
-      properties:
-        mac:
-          type: string
-        label:
-          type: string
-        sensor_category:
-          type: string
-        location:
-          type: string
-        enabled:
+        collector_status_present:
           type: boolean
-        maintenance_mode:
+        collector_reporting:
           type: boolean
-        maintenance_reason:
-          type: string
-        maintenance_since:
+        collector_updated_at:
           type: string
           format: date-time
-    EnergyReading:
-      type: object
-      required: [ts, source, device_key, metric, value, unit]
-      properties:
-        ts:
+        last_attempt_at:
           type: string
           format: date-time
-        source:
-          type: string
-        device_key:
-          type: string
-        label:
-          type: string
-        location:
-          type: string
-        metric:
-          type: string
-        value:
-          type: number
-        unit:
-          type: string
-    EnergySeries:
-      type: object
-      required: [source, device_key, metric, range, unit, points]
-      properties:
-        source:
-          type: string
-        device_key:
-          type: string
-        metric:
-          type: string
-        range:
-          $ref: '#/components/schemas/Range'
-        unit:
-          type: string
-        points:
-          type: array
-          items:
-            $ref: '#/components/schemas/SeriesPoint'
-    ErrorResponse:
-      type: object
-      required: [error]
-      properties:
-        error:
-          type: string
-    HealthAlert:
-      type: object
-      required: [alert_key, status, severity, title, source, summary, labels, last_evaluated_at, updated_at]
-      properties:
-        alert_key:
-          type: string
-        status:
-          type: string
-          enum: [firing, resolved]
-        severity:
-          type: string
-          enum: [info, warning, critical]
-        title:
-          type: string
-        source:
-          type: string
-        summary:
-          type: string
-        labels:
-          type: object
-          additionalProperties:
-            type: string
-        first_fired_at:
+        last_success_at:
           type: string
           format: date-time
-        last_evaluated_at:
+        last_data_at:
           type: string
           format: date-time
-        last_notified_at:
+        first_failure_at:
           type: string
           format: date-time
-        acknowledged_at:
+        last_failure_at:
           type: string
           format: date-time
-        acknowledged_by:
-          type: string
-        muted_until:
-          type: string
-          format: date-time
-        muted_by:
-          type: string
-        muted_reason:
-          type: string
-        manually_resolved_at:
-          type: string
-          format: date-time
-        manually_resolved_by:
-          type: string
-        resolved_at:
-          type: string
-          format: date-time
-        updated_at:
-          type: string
-          format: date-time
-    HealthAlertOperationRequest:
-      type: object
-      properties:
-        actor:
-          type: string
-        reason:
-          type: string
-        maintenance_mode:
-          type: boolean
-    HealthDetails:
-      type: object
-      required: [status, database, collector_targets, stale_collectors, active_health_alerts, failed_deliveries_24h, webhook_configured]
-      properties:
-        status:
-          type: string
-        database:
-          type: string
-        collector_targets:
+        consecutive_failures:
           type: integer
-        stale_collectors:
-          type: integer
-        active_health_alerts:
-          type: integer
-        failed_deliveries_24h:
-          type: integer
-        webhook_configured:
-          type: boolean
-    HealthNotificationEvent:
-      type: object
-      required: [id, event_id, alert_key, channel_type, status, created_at]
-      properties:
-        id:
-          type: integer
-        event_id:
+        last_error:
           type: string
-        alert_key:
-          type: string
-        channel_id:
-          type: integer
-        channel_type:
-          type: string
-        status:
-          $ref: '#/components/schemas/NotificationStatus'
-        http_status:
-          type: integer
-        response_body:
-          type: string
-        error:
-          type: string
-        created_at:
-          type: string
-          format: date-time
-    HealthResponse:
-      type: object
-      required: [status]
-      properties:
-        status:
-          type: string
-          example: ok
-        environment:
-          type: string
-        env:
-          type: string
-          deprecated: true
-    IOSDevice:
-      type: object
-      required: [id, apns_device_token, app_bundle_id, apns_environment, enabled]
-      properties:
-        id:
-          type: integer
-        user_id:
-          type: integer
-        apns_device_token:
-          type: string
-        app_bundle_id:
-          type: string
-        apns_environment:
-          $ref: '#/components/schemas/APNSEnvironment'
-        device_name:
-          type: string
-        enabled:
-          type: boolean
-        disabled_reason:
-          type: string
-        disabled_at:
-          type: string
-          format: date-time
-        last_seen_at:
-          type: string
-          format: date-time
-        created_at:
-          type: string
-          format: date-time
-        updated_at:
-          type: string
-          format: date-time
-    IOSDeviceRequest:
-      type: object
-      required: [apns_device_token, app_bundle_id, apns_environment]
-      properties:
-        apns_device_token:
-          type: string
-        app_bundle_id:
-          type: string
-        apns_environment:
-          $ref: '#/components/schemas/APNSEnvironment'
-        device_name:
-          type: [string, 'null']
-        enabled:
-          type: boolean
-          default: true
-    LatestTelemetry:
-      type: object
-      required: [device, ts, values]
-      properties:
-        device:
-          $ref: '#/components/schemas/Device'
-        ts:
-          type: string
-          format: date-time
-        values:
-          type: object
-          additionalProperties:
-            type: [number, 'null']
-    NotificationEvent:
-      type: object
-      required: [id, triggered_at, status]
-      properties:
-        id:
-          type: integer
-        alert_rule_id:
-          type: integer
-        user_id:
-          type: integer
-        mac:
-          type: string
-        metric:
-          $ref: '#/components/schemas/SensorMetric'
-        value:
-          type: number
-        threshold:
-          type: number
-        triggered_at:
-          type: string
-          format: date-time
-        sent_at:
-          type: string
-          format: date-time
-        status:
-          $ref: '#/components/schemas/NotificationStatus'
-        error_message:
-          type: string
-        created_at:
-          type: string
-          format: date-time
-    SchemaMigration:
-      type: object
-      required: [version, name, checksum, applied_at]
-      properties:
-        version:
-          type: integer
-          format: int64
-        name:
-          type: string
-        checksum:
-          type: string
-        applied_at:
-          type: string
-          format: date-time
-    SchemaStatus:
-      type: object
-      required: [current_version, migrations]
-      properties:
-        current_version:
-          type: integer
-          format: int64
-        migrations:
-          type: array
-          items:
-            $ref: '#/components/schemas/SchemaMigration'
-    SensorSeries:
-      type: object
-      required: [mac, metric, range, points]
-      properties:
-        mac:
-          type: string
-        metric:
-          $ref: '#/components/schemas/SensorMetric'
-        range:
-          $ref: '#/components/schemas/Range'
-        unit:
-          type: string
-        points:
-          type: array
-          items:
-            $ref: '#/components/schemas/SeriesPoint'
-    SeriesPoint:
-      type: object
-      required: [ts, value]
-      properties:
-        ts:
-          type: string
-          format: date-time
-        value:
-          type: number
-    TestNotificationResponse:
-      type: object
-      required: [id, app_bundle_id, apns_environment, status, sent_at]
-      properties:
-        id:
-          type: integer
-        device_name:
-          type: string
-        app_bundle_id:
-          type: string
-        apns_environment:
-          $ref: '#/components/schemas/APNSEnvironment'
-        notification_event_id:
-          type: integer
-        notification_event_created_at:
-          type: string
-          format: date-time
-        status:
-          type: string
-        sent_at:
-          type: string
-          format: date-time
-    TestHealthWebhookResponse:
-      type: object
-      required: [event_id, status]
-      properties:
-        event_id:
-          type: string
-        status:
-          type: string
-        http_status:
-          type: integer
-    APNSEnvironment:
-      type: string
-      enum: [sandbox, production]
-    NotificationStatus:
-      type: string
-      enum: [pending, dry_run, sent, failed, skipped]
-    Range:
-      type: string
-      enum: [1d, 1w, 1m, 3m, 1y]
-      default: 1d
-    SensorMetric:
-      type: string
-      enum:
-        - temperature_c
-        - humidity_percent
-        - battery_percent
-        - rssi_dbm
-        - pressure_hpa
-        - co2_ppm
-        - lux
-        - etvoc

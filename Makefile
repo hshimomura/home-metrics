@@ -7,7 +7,6 @@ BINS := \
 	hm-ble-collector \
 	hm-db-check \
 	hm-db-migrate \
-	hm-alert-worker \
 	hm-api-server \
 	hm-db-maint \
 	hm-cisco-spaces-collector \

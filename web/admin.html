@@ -17,21 +17,12 @@
     th, td { padding: 9px 10px; border-bottom: 1px solid #e4e7eb; text-align: left; font-size: 14px; vertical-align: top; }
     th { background: #eef1f4; font-weight: 650; white-space: nowrap; }
     tr:last-child td { border-bottom: 0; }
-    tr.targeted td { background: #fff8d6; box-shadow: inset 3px 0 0 #f9ab00; }
     code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; }
     input { padding: 7px 8px; border: 1px solid #b8c0c8; border-radius: 6px; min-width: 240px; }
     button { padding: 8px 12px; border: 1px solid #7c8a97; border-radius: 6px; background: #fff; cursor: pointer; }
     button:hover { background: #eef1f4; }
     button:disabled { cursor: wait; opacity: 0.65; }
-    .switch-button { display: inline-flex; align-items: center; gap: 8px; padding: 4px 8px 4px 4px; border: 0; background: transparent; color: inherit; }
-    .switch-button:hover { background: transparent; }
-    .switch-track { width: 42px; height: 24px; border-radius: 999px; background: #c7ced6; position: relative; transition: background 120ms ease; }
-    .switch-thumb { position: absolute; top: 2px; left: 2px; width: 20px; height: 20px; border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.28); transition: transform 120ms ease; }
-    .switch-button[aria-checked="true"] .switch-track { background: #34c759; }
-    .switch-button[aria-checked="true"] .switch-thumb { transform: translateX(18px); }
-    .switch-text { font-size: 13px; font-weight: 650; white-space: nowrap; }
     .toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
-    .actions { display: flex; flex-wrap: wrap; gap: 6px; }
     .summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px; }
     .summary-item { border: 1px solid #d9dee3; background: #fff; padding: 12px; }
     .summary-label { color: #5f6b76; font-size: 12px; }
@@ -41,8 +32,7 @@
     .pill { display: inline-block; padding: 2px 7px; border-radius: 999px; font-size: 12px; border: 1px solid #c7ced6; }
     .ok { color: #146c2e; background: #e6f4ea; border-color: #9ad0a6; }
     .warning { color: #8a4b00; background: #fff4de; border-color: #e7bc6b; }
-    .critical, .failed, .firing { color: #a61b1b; background: #fce8e6; border-color: #e8a29a; }
-    .resolved, .sent { color: #146c2e; background: #e6f4ea; border-color: #9ad0a6; }
+    .degraded, .failed { color: #a61b1b; background: #fce8e6; border-color: #e8a29a; }
     .disabled { color: #5f6b76; background: #f1f3f4; border-color: #c7ced6; }
     .muted { color: #5f6b76; font-size: 13px; }
     .error { color: #a61b1b; }
@@ -55,15 +45,11 @@
       th { background: #2a3036; }
       input, button { background: #1f2327; color: #e8eaed; border-color: #4b5560; }
       button:hover { background: #2a3036; }
-      .switch-button, .switch-button:hover { background: transparent; }
-      .switch-track { background: #4b5560; }
-      .switch-thumb { background: #f1f3f4; }
       .summary-label, .muted { color: #a8b0b8; }
-      .ok, .resolved, .sent { color: #c8f2d0; background: #16351f; border-color: #2f6840; }
+      .ok { color: #c8f2d0; background: #16351f; border-color: #2f6840; }
       .warning { color: #ffe0a3; background: #442c05; border-color: #76511b; }
-      .critical, .failed, .firing { color: #ffd1cc; background: #4b1c19; border-color: #7e322c; }
+      .degraded, .failed { color: #ffd1cc; background: #4b1c19; border-color: #7e322c; }
       .disabled { color: #a8b0b8; background: #2a3036; border-color: #4b5560; }
-      tr.targeted td { background: #3a320d; box-shadow: inset 3px 0 0 #fdd663; }
     }
   </style>
 </head>
@@ -77,24 +63,18 @@
       <div class="toolbar">
         <a href="/">Metrics</a>
         <input id="token" type="password" placeholder="API token">
-        <button id="clear-events">Clear history</button>
         <button id="refresh">Refresh</button>
       </div>
     </header>
 
     <section>
-      <h2>Health Summary</h2>
+      <h2>Collector Summary</h2>
       <div class="summary" id="summary"></div>
     </section>
 
     <section>
       <h2>Cisco Spaces Firehose</h2>
       <div class="summary" id="cisco-firehose"></div>
-    </section>
-
-    <section>
-      <h2>Schema</h2>
-      <div class="summary" id="schema"></div>
     </section>
 
     <section>
@@ -106,19 +86,8 @@
     </section>
 
     <section>
-      <h2>Health Alerts</h2>
-      <table>
-        <thead><tr><th>Status</th><th>Severity</th><th>Title</th><th>Source</th><th>Summary</th><th>Maintenance</th><th>Updated</th><th>Last Notified</th><th>Action</th></tr></thead>
-        <tbody id="alerts"></tbody>
-      </table>
-    </section>
-
-    <section>
-      <h2>Webhook Delivery</h2>
-      <table>
-        <thead><tr><th>Created</th><th>Status</th><th>Event</th><th>Alert</th><th>HTTP</th><th>Error</th></tr></thead>
-        <tbody id="events"></tbody>
-      </table>
+      <h2>Schema</h2>
+      <div class="summary" id="schema"></div>
     </section>
   </main>
 
@@ -128,38 +97,6 @@
     token.value = localStorage.getItem('ble_api_token') || '';
     token.addEventListener('change', () => localStorage.setItem('ble_api_token', token.value));
     document.querySelector('#refresh').addEventListener('click', load);
-    document.querySelector('#clear-events').addEventListener('click', clearWebhookHistory);
-    window.addEventListener('hashchange', focusDeepLinkedAlert);
-    document.querySelector('#alerts').addEventListener('click', async event => {
-      const button = event.target.closest('button[data-test-alert], button[data-alert-action]');
-      if (!button) return;
-      button.disabled = true;
-      statusLine.textContent = 'Running admin action';
-      statusLine.className = 'muted';
-      try {
-        if (button.dataset.testAlert) {
-          const result = await postJSON(`/api/admin/health-alerts/${encodeURIComponent(button.dataset.testAlert)}/test-webhook`);
-          statusLine.textContent = `Test webhook ${result.status}: ${result.event_id}`;
-        } else {
-          const action = button.dataset.alertAction;
-          if (action === 'maintenance') {
-            const active = button.dataset.maintenanceActive === 'true';
-            await postJSON(`/api/admin/devices/${encodeURIComponent(button.dataset.deviceMac)}/maintenance`, active ? {
-              maintenance_mode: false
-            } : {
-              maintenance_mode: true,
-              reason: 'maintenance from /admin'
-            });
-          }
-          statusLine.textContent = `Alert ${action} completed`;
-        }
-        await load();
-      } catch (err) {
-        statusLine.textContent = err.message;
-        statusLine.className = 'muted error';
-        button.disabled = false;
-      }
-    });
 
     function headers() {
       return token.value ? { Authorization: `Bearer ${token.value}` } : {};
@@ -169,39 +106,6 @@
       const res = await fetch(path, { headers: headers() });
       if (!res.ok) throw new Error(`${path}: ${res.status}`);
       return res.json();
-    }
-
-    async function postJSON(path) {
-      const requestHeaders = headers();
-      let body;
-      if (arguments.length > 1) {
-        requestHeaders['Content-Type'] = 'application/json';
-        body = JSON.stringify(arguments[1]);
-      }
-      const res = await fetch(path, { method: 'POST', headers: requestHeaders, body });
-      if (!res.ok) throw new Error(`${path}: ${res.status}`);
-      return res.json();
-    }
-
-    async function deleteJSON(path) {
-      const res = await fetch(path, { method: 'DELETE', headers: headers() });
-      if (!res.ok) throw new Error(`${path}: ${res.status}`);
-      if (res.status === 204) return null;
-      return res.json();
-    }
-
-    async function clearWebhookHistory() {
-      if (!confirm('Clear all webhook delivery history? Current health alerts are not deleted.')) return;
-      statusLine.textContent = 'Clearing webhook delivery history';
-      statusLine.className = 'muted';
-      try {
-        await deleteJSON('/api/admin/health-notification-events');
-        statusLine.textContent = 'Webhook delivery history cleared';
-        await load();
-      } catch (err) {
-        statusLine.textContent = err.message;
-        statusLine.className = 'muted error';
-      }
     }
 
     function escapeHTML(value) {
@@ -245,11 +149,8 @@
       const items = [
         ['Status', pill(summary.status)],
         ['Database', pill(summary.database)],
-        ['Collectors', summary.collector_targets],
-        ['Active alerts', summary.active_health_alerts],
-        ['Collector alerts', summary.stale_collectors],
-        ['Failed deliveries 24h', summary.failed_deliveries_24h],
-        ['Webhook', summary.webhook_configured ? pill('ok') : pill('disabled')],
+        ['Collectors', escapeHTML(summary.collector_targets ?? 0)],
+        ['Stale collectors', escapeHTML(summary.stale_collectors ?? 0)],
       ];
       document.querySelector('#summary').innerHTML = items.map(([label, value]) => (
         `<div class="summary-item"><div class="summary-label">${escapeHTML(label)}</div><div class="summary-value">${value}</div></div>`
@@ -303,103 +204,25 @@
       `).join('') || '<tr><td colspan="9" class="muted">No collector status rows.</td></tr>';
     }
 
-    function renderAlerts(items, devices) {
-      const deviceMap = new Map((devices || []).map(device => [String(device.mac || '').toLowerCase(), device]));
-      document.querySelector('#alerts').innerHTML = items.map(item => `
-        <tr data-alert-key="${escapeHTML(item.alert_key)}">
-          <td>${pill(item.status)}</td>
-          <td>${pill(item.severity)}</td>
-          <td>${escapeHTML(item.title)}<div class="muted mono-wrap"><code>${escapeHTML(item.alert_key)}</code></div></td>
-          <td class="mono-wrap">${escapeHTML(item.source)}</td>
-          <td>${escapeHTML(item.summary)}</td>
-          <td>${maintenanceState(item, deviceMap)}</td>
-          <td>${time(item.updated_at)}<div class="muted">${age(item.updated_at)}</div></td>
-          <td>${time(item.last_notified_at)}</td>
-          <td>
-            <div class="actions">
-              ${maintenanceButton(item, deviceMap)}
-              <button data-test-alert="${escapeHTML(item.alert_key)}">Test webhook</button>
-            </div>
-          </td>
-        </tr>
-      `).join('') || '<tr><td colspan="9" class="muted">No health alerts.</td></tr>';
-      focusDeepLinkedAlert();
-    }
-
-    function sensorAlertDevice(item, deviceMap) {
-      if (item.labels?.kind !== 'sensor') return null;
-      const mac = String(item.labels?.mac || '').toLowerCase();
-      return mac ? deviceMap.get(mac) || null : null;
-    }
-
-    function maintenanceState(item, deviceMap) {
-      const device = sensorAlertDevice(item, deviceMap);
-      if (!device) return '<span class="muted">Not applicable</span>';
-      if (!device.maintenance_mode) return '<span class="muted">Not in maintenance</span>';
-      const reason = device.maintenance_reason ? `<div class="muted">${escapeHTML(device.maintenance_reason)}</div>` : '';
-      return `${pill('maintenance')}<div class="muted">In maintenance since ${escapeHTML(time(device.maintenance_since))}</div>${reason}`;
-    }
-
-    function maintenanceButton(item, deviceMap) {
-      const device = sensorAlertDevice(item, deviceMap);
-      if (!device) return '';
-      const active = device.maintenance_mode ? 'true' : 'false';
-      const label = device.maintenance_mode ? 'End maintenance' : 'Start maintenance';
-      return `<button class="switch-button" role="switch" aria-checked="${active}" aria-label="${label}" title="${label}" data-alert-action="maintenance" data-device-mac="${escapeHTML(device.mac)}" data-maintenance-active="${active}"><span class="switch-track"><span class="switch-thumb"></span></span><span class="switch-text">Maintenance</span></button>`;
-    }
-
-    function renderEvents(items) {
-      document.querySelector('#events').innerHTML = items.map(item => `
-        <tr>
-          <td>${time(item.created_at)}<div class="muted">${age(item.created_at)}</div></td>
-          <td>${pill(item.status)}</td>
-          <td class="mono-wrap"><code>${escapeHTML(item.event_id)}</code></td>
-          <td class="mono-wrap"><code>${escapeHTML(item.alert_key)}</code></td>
-          <td>${cell(item.http_status)}</td>
-          <td class="mono-wrap">${escapeHTML(cell(item.error || item.response_body))}</td>
-        </tr>
-      `).join('') || '<tr><td colspan="6" class="muted">No health notification events.</td></tr>';
-    }
-
     async function load() {
       statusLine.textContent = 'Loading';
       statusLine.className = 'muted';
       try {
-        const [summary, cisco, schema, collectors, alerts, events, devices] = await Promise.all([
+        const [summary, cisco, schema, collectors] = await Promise.all([
           getJSON('/api/health/details'),
           getJSON('/api/admin/cisco-spaces-firehose'),
           getJSON('/api/admin/schema'),
           getJSON('/api/admin/collector-status'),
-          getJSON('/api/admin/health-alerts'),
-          getJSON('/api/admin/health-notification-events'),
-          getJSON('/api/devices'),
         ]);
         renderSummary(summary);
         renderCiscoFirehose(cisco);
         renderSchema(schema);
         renderCollectors(collectors);
-        renderAlerts(alerts, devices);
-        renderEvents(events);
         statusLine.textContent = `Loaded ${new Date().toLocaleString()}`;
       } catch (err) {
         statusLine.textContent = err.message;
         statusLine.className = 'muted error';
       }
-    }
-
-    function linkedAlertKey() {
-      if (!location.hash.startsWith('#alert=')) return '';
-      return decodeURIComponent(location.hash.slice('#alert='.length));
-    }
-
-    function focusDeepLinkedAlert() {
-      const key = linkedAlertKey();
-      document.querySelectorAll('#alerts tr.targeted').forEach(row => row.classList.remove('targeted'));
-      if (!key) return;
-      const row = [...document.querySelectorAll('#alerts tr[data-alert-key]')].find(item => item.dataset.alertKey === key);
-      if (!row) return;
-      row.classList.add('targeted');
-      row.scrollIntoView({ block: 'center', behavior: 'smooth' });
     }
 
     load();

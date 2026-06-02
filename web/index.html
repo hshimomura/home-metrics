@@ -85,22 +85,6 @@
     </section>
 
     <section>
-      <h2>Alert Rules</h2>
-      <table>
-        <thead><tr><th>ID</th><th>MAC</th><th>Metric</th><th>Condition</th><th>Cooldown</th><th>Last Notified</th><th>Enabled</th><th>Last Value</th><th>Action</th></tr></thead>
-        <tbody id="rules"></tbody>
-      </table>
-    </section>
-
-    <section>
-      <h2>iOS Devices</h2>
-      <table>
-        <thead><tr><th>ID</th><th>Name</th><th>Bundle</th><th>Environment</th><th>Enabled</th><th>Disabled</th><th>Last Seen</th><th>Updated</th><th>Token</th><th>Action</th></tr></thead>
-        <tbody id="ios-devices"></tbody>
-      </table>
-    </section>
-
-    <section>
       <h2>Energy</h2>
       <table>
         <thead><tr><th>Device</th><th>Source</th><th>Metric</th><th>Value</th><th>Unit</th><th>Latest</th></tr></thead>
@@ -121,16 +105,6 @@
       </div>
     </section>
 
-    <section>
-      <div class="detail-toolbar">
-        <h2>Notification Events</h2>
-        <button id="clear-events">Clear history</button>
-      </div>
-      <table>
-        <thead><tr><th>Time</th><th>Status</th><th>MAC</th><th>Metric</th><th>Value</th><th>Error</th></tr></thead>
-        <tbody id="events"></tbody>
-      </table>
-    </section>
   </main>
 
   <script>
@@ -159,18 +133,6 @@
     token.value = localStorage.getItem('ble_api_token') || '';
     token.addEventListener('change', () => localStorage.setItem('ble_api_token', token.value));
     document.querySelector('#refresh').addEventListener('click', load);
-    document.querySelector('#clear-events').addEventListener('click', async () => {
-      if (!confirm('Delete notification event history?')) return;
-      statusLine.textContent = 'Deleting notification history';
-      statusLine.className = 'muted';
-      try {
-        await deleteAction('/api/notification-events');
-        await load();
-      } catch (err) {
-        statusLine.textContent = err.message;
-        statusLine.className = 'muted error';
-      }
-    });
 
     const metrics = [
       { key: 'temperature_c', label: 'Temp', unit: '°C', digits: 1 },
@@ -191,22 +153,6 @@
       const res = await fetch(path, { headers: headers() });
       if (!res.ok) throw new Error(`${path}: ${res.status}`);
       return res.json();
-    }
-
-    async function postAction(path) {
-      const res = await fetch(path, { method: 'POST', headers: headers() });
-      if (!res.ok) throw new Error(`${path}: ${res.status}`);
-    }
-
-    async function postJSON(path) {
-      const res = await fetch(path, { method: 'POST', headers: headers() });
-      if (!res.ok) throw new Error(`${path}: ${res.status}`);
-      return res.json();
-    }
-
-    async function deleteAction(path) {
-      const res = await fetch(path, { method: 'DELETE', headers: headers() });
-      if (!res.ok) throw new Error(`${path}: ${res.status}`);
     }
 
     function cell(value) {
@@ -250,22 +196,6 @@
       return item?.enabled !== false;
     }
 
-    function shortToken(value) {
-      if (!value) return '-';
-      if (value.length <= 16) return value;
-      return `${value.slice(0, 8)}...${value.slice(-8)}`;
-    }
-
-    function disabledInfo(device) {
-      if (!device.disabled_reason && !device.disabled_at) return '-';
-      return [device.disabled_reason, device.disabled_at].filter(Boolean).join(' / ');
-    }
-
-    function matchesVisibleDevice(item, visibleMACs) {
-      const mac = (item?.mac || '').toLowerCase();
-      return visibleMACs.has(mac);
-    }
-
     function renderMetricControls() {
       metricControls.innerHTML = metrics.map(metric => (
         `<button class="metric-button" data-metric="${metric.key}" aria-pressed="${metric.key === selectedMetric}">${metric.label}</button>`
@@ -294,64 +224,12 @@
       if (reading) selectEnergy(reading);
     });
 
-    document.querySelector('#rules').addEventListener('click', async event => {
-      const button = event.target.closest('button[data-reset-rule-id]');
-      if (!button) return;
-      button.disabled = true;
-      statusLine.textContent = `Resetting cooldown for rule ${button.dataset.resetRuleId}`;
-      statusLine.className = 'muted';
-      try {
-        await postAction(`/api/alert-rules/${button.dataset.resetRuleId}/reset-cooldown`);
-        await load();
-      } catch (err) {
-        statusLine.textContent = err.message;
-        statusLine.className = 'muted error';
-        button.disabled = false;
-      }
-    });
-
-    document.querySelector('#ios-devices').addEventListener('click', async event => {
-      const testButton = event.target.closest('button[data-test-ios-device-id]');
-      if (testButton) {
-        testButton.disabled = true;
-        statusLine.textContent = `Sending test notification to iOS device ${testButton.dataset.testIosDeviceId}`;
-        statusLine.className = 'muted';
-        try {
-          const result = await postJSON(`/api/ios/devices/${testButton.dataset.testIosDeviceId}/test-notification`);
-          statusLine.textContent = `Test notification ${result.status} at ${new Date(result.sent_at).toLocaleString()}`;
-          statusLine.className = 'muted';
-        } catch (err) {
-          statusLine.textContent = err.message;
-          statusLine.className = 'muted error';
-        } finally {
-          testButton.disabled = false;
-        }
-        return;
-      }
-
-      const button = event.target.closest('button[data-delete-ios-device-id]');
-      if (!button) return;
-      if (!confirm(`Delete iOS device ${button.dataset.deleteIosDeviceId}?`)) return;
-      button.disabled = true;
-      statusLine.textContent = `Deleting iOS device ${button.dataset.deleteIosDeviceId}`;
-      statusLine.className = 'muted';
-      try {
-        await deleteAction(`/api/ios/devices/${button.dataset.deleteIosDeviceId}`);
-        await load();
-      } catch (err) {
-        statusLine.textContent = err.message;
-        statusLine.className = 'muted error';
-        button.disabled = false;
-      }
-    });
-
     async function load() {
       statusLine.textContent = 'Loading';
       statusLine.className = 'muted';
       try {
         const devices = (await getJSON('/api/devices')).filter(visibleDevice);
         devicesCache = devices;
-        const visibleMACs = new Set(devices.map(device => device.mac.toLowerCase()));
         const latest = await Promise.all(devices.map(async d => {
           try { return { device: d, latest: await getJSON(`/api/devices/${d.mac}/latest`) }; }
           catch { return { device: d, latest: null }; }
@@ -370,12 +248,6 @@
           }
         }
 
-        const rules = (await getJSON('/api/alert-rules')).filter(item => matchesVisibleDevice(item, visibleMACs));
-        document.querySelector('#rules').innerHTML = rules.map(r => `<tr><td>${r.id}</td><td>${escapeHTML(r.mac)}</td><td>${escapeHTML(r.metric)}</td><td>${escapeHTML(r.operator)} ${escapeHTML(r.threshold)}</td><td>${Math.round(r.cooldown_seconds / 3600)}h</td><td>${escapeHTML(cell(r.last_notified_at))}</td><td>${r.enabled}</td><td>${cell(r.last_value)}</td><td><button data-reset-rule-id="${r.id}">Reset</button></td></tr>`).join('');
-
-        const iosDevices = await getJSON('/api/ios/devices');
-        document.querySelector('#ios-devices').innerHTML = iosDevices.map(device => `<tr><td>${device.id}</td><td>${escapeHTML(cell(device.device_name))}</td><td>${escapeHTML(device.app_bundle_id)}</td><td>${escapeHTML(device.apns_environment)}</td><td>${device.enabled}</td><td>${escapeHTML(disabledInfo(device))}</td><td>${escapeHTML(cell(device.last_seen_at))}</td><td>${escapeHTML(cell(device.updated_at))}</td><td title="${escapeHTML(device.apns_device_token)}">${escapeHTML(shortToken(device.apns_device_token))}</td><td><button data-test-ios-device-id="${device.id}" ${device.enabled ? '' : 'disabled'}>Test</button> <button data-delete-ios-device-id="${device.id}">Delete</button></td></tr>`).join('');
-
         const energy = await getJSON('/api/energy/latest');
         energyCache = energy;
         document.querySelector('#energy').innerHTML = energy.map((e, index) => `<tr><td><button class="link-button" data-energy-index="${index}">${escapeHTML(cell(e.label || e.device_key))}</button></td><td>${escapeHTML(e.source)}</td><td><button class="link-button" data-energy-index="${index}">${escapeHTML(e.metric)}</button></td><td>${number(e.value, 0)}</td><td>${escapeHTML(cell(e.unit))}</td><td>${escapeHTML(cell(e.ts))}</td></tr>`).join('');
@@ -393,8 +265,6 @@
           }
         }
 
-        const events = (await getJSON('/api/notification-events?limit=20')).filter(item => matchesVisibleDevice(item, visibleMACs));
-        document.querySelector('#events').innerHTML = events.map(e => `<tr><td>${escapeHTML(e.created_at)}</td><td>${escapeHTML(e.status)}</td><td>${escapeHTML(e.mac)}</td><td>${escapeHTML(e.metric)}</td><td>${cell(e.value)}</td><td>${escapeHTML(cell(e.error_message))}</td></tr>`).join('');
         statusLine.textContent = `Updated ${new Date().toLocaleString()}`;
       } catch (err) {
         statusLine.textContent = err.message;

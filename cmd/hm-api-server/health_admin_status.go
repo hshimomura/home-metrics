@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"time"
 
@@ -17,19 +18,19 @@ func (api *apiServer) handleHealthDetails(w http.ResponseWriter, r *http.Request
 	var res healthDetailsResponse
 	res.Status = "ok"
 	res.Database = "ok"
-	res.WebhookConfigured = api.adminWebhook != nil
 	err := api.db.QueryRow(r.Context(), `
 		SELECT
 			(SELECT count(*) FROM collector_status),
-			(SELECT count(*) FROM health_alert_state WHERE status = 'firing' AND labels->>'kind' = 'collector'),
-			(SELECT count(*) FROM health_alert_state WHERE status = 'firing'),
-			(SELECT count(*) FROM health_notification_events WHERE status = 'failed' AND created_at >= now() - interval '24 hours')
-	`).Scan(&res.CollectorTargets, &res.StaleCollectors, &res.ActiveHealthAlerts, &res.FailedDeliveries24h)
+			(SELECT count(*) FROM collector_status
+			 WHERE last_success_at IS NULL
+			    OR consecutive_failures > 0
+			    OR updated_at < now() - $1::interval)
+	`, intervalSeconds(envDuration("COLLECTOR_STATUS_STALE_AFTER", 5*time.Minute))).Scan(&res.CollectorTargets, &res.StaleCollectors)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "query health details")
 		return
 	}
-	if res.StaleCollectors > 0 || res.ActiveHealthAlerts > 0 || res.FailedDeliveries24h > 0 {
+	if res.StaleCollectors > 0 {
 		res.Status = "degraded"
 	}
 	writeJSON(w, http.StatusOK, res)
@@ -132,7 +133,7 @@ func (api *apiServer) handleCiscoSpacesFirehoseStatus(w http.ResponseWriter, r *
 		res.LastFailureAt = timePtrFromPg(lastFailureAt)
 		res.CollectorUpdatedAt = timePtrFromPg(updatedAt)
 		if res.CollectorUpdatedAt != nil {
-			window := envDuration("HEALTH_CISCO_SPACES_HEARTBEAT_WARNING_AFTER", envDuration("HEALTH_COLLECTOR_HEARTBEAT_WARNING_AFTER", 5*time.Minute))
+			window := envDuration("COLLECTOR_STATUS_STALE_AFTER", 5*time.Minute)
 			res.CollectorReporting = time.Since(*res.CollectorUpdatedAt) < window
 		}
 	}
@@ -202,4 +203,8 @@ func (api *apiServer) handleCollectorStatus(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	writeJSON(w, http.StatusOK, items)
+}
+
+func intervalSeconds(duration time.Duration) string {
+	return fmt.Sprintf("%f seconds", duration.Seconds())
 }

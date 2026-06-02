@@ -9,12 +9,9 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"strconv"
 	"strings"
 	"syscall"
 	"time"
-
-	"home-metrics/internal/adminwebhook"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -22,30 +19,22 @@ import (
 )
 
 const (
-	defaultAddr   = ":8080"
-	defaultDBDSN  = "dbname=ble_sensors host=/var/run/postgresql"
-	defaultUserID = int64(1)
-
-	testNotificationEventCreatedAtEnv = "APNS_TEST_NOTIFICATION_EVENT_CREATED_AT"
+	defaultAddr  = ":8080"
+	defaultDBDSN = "dbname=ble_sensors host=/var/run/postgresql"
 )
 
 type apiServer struct {
 	db             *pgxpool.Pool
 	apiToken       string
 	allowedOrigins map[string]bool
-	apns           *apnsTestSender
-	adminWebhook   *adminwebhook.Client
 }
 
 type deviceResponse struct {
-	MAC               string     `json:"mac"`
-	Label             string     `json:"label"`
-	SensorCategory        string     `json:"sensor_category,omitempty"`
-	Location          string     `json:"location,omitempty"`
-	Enabled           bool       `json:"enabled"`
-	MaintenanceMode   bool       `json:"maintenance_mode"`
-	MaintenanceReason string     `json:"maintenance_reason,omitempty"`
-	MaintenanceSince  *time.Time `json:"maintenance_since,omitempty"`
+	MAC        string `json:"mac"`
+	Label      string `json:"label"`
+	SensorCategory string `json:"sensor_category,omitempty"`
+	Location   string `json:"location,omitempty"`
+	Enabled    bool   `json:"enabled"`
 }
 
 type latestResponse struct {
@@ -57,94 +46,6 @@ type latestResponse struct {
 type seriesPoint struct {
 	TS    time.Time `json:"ts"`
 	Value float64   `json:"value"`
-}
-
-type alertRuleResponse struct {
-	ID              int64      `json:"id"`
-	UserID          int64      `json:"user_id"`
-	MAC             string     `json:"mac"`
-	Metric          string     `json:"metric"`
-	Operator        string     `json:"operator"`
-	Threshold       float64    `json:"threshold"`
-	CooldownSeconds int64      `json:"cooldown_seconds"`
-	Enabled         bool       `json:"enabled"`
-	LastNotifiedAt  *time.Time `json:"last_notified_at,omitempty"`
-	LastValue       *float64   `json:"last_value,omitempty"`
-	CreatedAt       time.Time  `json:"created_at"`
-	UpdatedAt       time.Time  `json:"updated_at"`
-}
-
-type alertRuleRequest struct {
-	MAC             string   `json:"mac"`
-	Metric          string   `json:"metric"`
-	Operator        string   `json:"operator"`
-	Threshold       *float64 `json:"threshold"`
-	CooldownSeconds *int64   `json:"cooldown_seconds"`
-	Enabled         *bool    `json:"enabled"`
-}
-
-type iosDeviceRequest struct {
-	APNSDeviceToken string  `json:"apns_device_token"`
-	AppBundleID     string  `json:"app_bundle_id"`
-	APNSEnvironment string  `json:"apns_environment"`
-	DeviceName      *string `json:"device_name"`
-	Enabled         *bool   `json:"enabled"`
-}
-
-type iosDeviceResponse struct {
-	ID              int64      `json:"id"`
-	UserID          int64      `json:"user_id"`
-	APNSDeviceToken string     `json:"apns_device_token"`
-	AppBundleID     string     `json:"app_bundle_id"`
-	APNSEnvironment string     `json:"apns_environment"`
-	DeviceName      *string    `json:"device_name,omitempty"`
-	Enabled         bool       `json:"enabled"`
-	DisabledReason  *string    `json:"disabled_reason,omitempty"`
-	DisabledAt      *time.Time `json:"disabled_at,omitempty"`
-	LastSeenAt      *time.Time `json:"last_seen_at,omitempty"`
-	CreatedAt       time.Time  `json:"created_at"`
-	UpdatedAt       time.Time  `json:"updated_at"`
-}
-
-type testNotificationResponse struct {
-	ID                         int64      `json:"id"`
-	DeviceName                 *string    `json:"device_name,omitempty"`
-	AppBundleID                string     `json:"app_bundle_id"`
-	APNSEnvironment            string     `json:"apns_environment"`
-	NotificationEventID        int64      `json:"notification_event_id"`
-	NotificationEventCreatedAt time.Time  `json:"notification_event_created_at"`
-	Status                     string     `json:"status"`
-	SentAt                     *time.Time `json:"sent_at,omitempty"`
-}
-
-type testNotificationEvent struct {
-	ID           int64
-	AlertRuleID  *int64
-	UserID       *int64
-	MAC          string
-	Metric       string
-	Value        *float64
-	Threshold    *float64
-	TriggeredAt  time.Time
-	SentAt       *time.Time
-	Status       string
-	ErrorMessage *string
-	CreatedAt    time.Time
-}
-
-type notificationEventResponse struct {
-	ID           int64      `json:"id"`
-	AlertRuleID  *int64     `json:"alert_rule_id,omitempty"`
-	UserID       *int64     `json:"user_id,omitempty"`
-	MAC          string     `json:"mac"`
-	Metric       string     `json:"metric"`
-	Value        *float64   `json:"value,omitempty"`
-	Threshold    *float64   `json:"threshold,omitempty"`
-	TriggeredAt  time.Time  `json:"triggered_at"`
-	SentAt       *time.Time `json:"sent_at,omitempty"`
-	Status       string     `json:"status"`
-	ErrorMessage *string    `json:"error_message,omitempty"`
-	CreatedAt    time.Time  `json:"created_at"`
 }
 
 type energyLatestResponse struct {
@@ -219,14 +120,6 @@ func main() {
 		log.Fatal("API_TOKEN is required when API_REQUIRE_TOKEN=true")
 	}
 	allowedOrigins := parseAllowedOrigins(os.Getenv("API_ALLOWED_ORIGINS"))
-	apnsSender, err := newAPNSTestSenderFromEnv(http.DefaultClient)
-	if err != nil {
-		log.Printf("configure APNs test sender: %v", err)
-	}
-	adminWebhook, err := adminwebhook.New(os.Getenv("WEBHOOK_RELAY_URL"), os.Getenv("WEBHOOK_RELAY_TOKEN"), envDuration("WEBHOOK_RELAY_TIMEOUT", 10*time.Second), http.DefaultClient)
-	if err != nil {
-		log.Fatalf("configure admin webhook: %v", err)
-	}
 
 	db, err := pgxpool.New(ctx, dsn)
 	if err != nil {
@@ -236,7 +129,7 @@ func main() {
 
 	server := &http.Server{
 		Addr:              addr,
-		Handler:           newRouter(&apiServer{db: db, apiToken: apiToken, allowedOrigins: allowedOrigins, apns: apnsSender, adminWebhook: adminWebhook}),
+		Handler:           newRouter(&apiServer{db: db, apiToken: apiToken, allowedOrigins: allowedOrigins}),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
@@ -265,28 +158,11 @@ func newRouter(api *apiServer) http.Handler {
 	mux.HandleFunc("GET /api/admin/schema", api.handleSchema)
 	mux.HandleFunc("GET /api/admin/cisco-spaces-firehose", api.handleCiscoSpacesFirehoseStatus)
 	mux.HandleFunc("GET /api/admin/collector-status", api.handleCollectorStatus)
-	mux.HandleFunc("GET /api/admin/health-alerts", api.handleHealthAlerts)
-	mux.HandleFunc("GET /api/admin/health-notification-events", api.handleHealthNotificationEvents)
-	mux.HandleFunc("DELETE /api/admin/health-notification-events", api.handleDeleteHealthNotificationEvents)
-	mux.HandleFunc("POST /api/admin/devices/{mac}/maintenance", api.handleDeviceMaintenance)
-	mux.HandleFunc("POST /api/admin/health-alerts/{alert_key}/test-webhook", api.handleTestHealthWebhook)
 	mux.HandleFunc("GET /api/devices", api.handleDevices)
 	mux.HandleFunc("GET /api/devices/{mac}/latest", api.handleDeviceLatest)
 	mux.HandleFunc("GET /api/devices/{mac}/series", api.handleDeviceSeries)
-	mux.HandleFunc("GET /api/alert-rules", api.handleAlertRules)
-	mux.HandleFunc("POST /api/alert-rules", api.handleCreateAlertRule)
-	mux.HandleFunc("PUT /api/alert-rules/{id}", api.handleUpdateAlertRule)
-	mux.HandleFunc("POST /api/alert-rules/{id}/reset-cooldown", api.handleResetAlertRuleCooldown)
-	mux.HandleFunc("DELETE /api/alert-rules/{id}", api.handleDeleteAlertRule)
-	mux.HandleFunc("GET /api/notification-events", api.handleNotificationEvents)
-	mux.HandleFunc("DELETE /api/notification-events", api.handleDeleteNotificationEvents)
 	mux.HandleFunc("GET /api/energy/latest", api.handleEnergyLatest)
 	mux.HandleFunc("GET /api/energy/series", api.handleEnergySeries)
-	mux.HandleFunc("GET /api/ios/devices", api.handleIOSDevices)
-	mux.HandleFunc("POST /api/ios/devices", api.handleRegisterIOSDevice)
-	mux.HandleFunc("PUT /api/ios/devices/{id}", api.handleUpdateIOSDevice)
-	mux.HandleFunc("POST /api/ios/devices/{id}/test-notification", api.handleTestIOSDeviceNotification)
-	mux.HandleFunc("DELETE /api/ios/devices/{id}", api.handleDeleteIOSDevice)
 	mux.HandleFunc("GET /api/", api.handleUnsupportedAPIEndpoint)
 	mux.HandleFunc("POST /api/", api.handleUnsupportedAPIEndpoint)
 	mux.HandleFunc("PUT /api/", api.handleUnsupportedAPIEndpoint)
@@ -398,10 +274,7 @@ func (api *apiServer) handleDevices(w http.ResponseWriter, r *http.Request) {
 			label,
 			COALESCE(sensor_category, ''),
 			COALESCE(location, ''),
-			enabled,
-			maintenance_mode,
-			COALESCE(maintenance_reason, ''),
-			maintenance_since
+			enabled
 		FROM devices
 		ORDER BY mac
 	`)
@@ -415,13 +288,11 @@ func (api *apiServer) handleDevices(w http.ResponseWriter, r *http.Request) {
 	devices := []deviceResponse{}
 	for rows.Next() {
 		var d deviceResponse
-		var maintenanceSince pgtype.Timestamptz
-		if err := rows.Scan(&d.MAC, &d.Label, &d.SensorCategory, &d.Location, &d.Enabled, &d.MaintenanceMode, &d.MaintenanceReason, &maintenanceSince); err != nil {
+		if err := rows.Scan(&d.MAC, &d.Label, &d.SensorCategory, &d.Location, &d.Enabled); err != nil {
 			log.Printf("scan devices: %v", err)
 			writeError(w, http.StatusInternalServerError, "scan devices")
 			return
 		}
-		d.MaintenanceSince = timePtrFromPg(maintenanceSince)
 		devices = append(devices, d)
 	}
 	if err := rows.Err(); err != nil {
@@ -546,280 +417,6 @@ func (api *apiServer) handleDeviceSeries(w http.ResponseWriter, r *http.Request)
 		"range":  rangeKey,
 		"points": points,
 	})
-}
-
-func (api *apiServer) handleAlertRules(w http.ResponseWriter, r *http.Request) {
-	rows, err := api.db.Query(r.Context(), `
-		SELECT
-			r.id,
-			r.user_id,
-			r.mac,
-			r.metric,
-			r.operator,
-			r.threshold,
-			EXTRACT(EPOCH FROM r.cooldown_duration)::bigint,
-			r.enabled,
-			s.last_notified_at,
-			s.last_value,
-			r.created_at,
-			r.updated_at
-		FROM alert_rules r
-		LEFT JOIN alert_rule_state s ON s.alert_rule_id = r.id
-		WHERE r.user_id = $1
-		ORDER BY r.id
-	`, defaultUserID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "query alert rules")
-		return
-	}
-	defer rows.Close()
-
-	rules := []alertRuleResponse{}
-	for rows.Next() {
-		rule, err := scanAlertRule(rows)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "scan alert rules")
-			return
-		}
-		rules = append(rules, rule)
-	}
-	if err := rows.Err(); err != nil {
-		writeError(w, http.StatusInternalServerError, "read alert rules")
-		return
-	}
-	writeJSON(w, http.StatusOK, rules)
-}
-
-func (api *apiServer) handleCreateAlertRule(w http.ResponseWriter, r *http.Request) {
-	req, ok := decodeAlertRuleRequest(w, r, false)
-	if !ok {
-		return
-	}
-	enabled := true
-	if req.Enabled != nil {
-		enabled = *req.Enabled
-	}
-	cooldownSeconds := int64(24 * 60 * 60)
-	if req.CooldownSeconds != nil {
-		cooldownSeconds = *req.CooldownSeconds
-	}
-
-	row := api.db.QueryRow(r.Context(), `
-		INSERT INTO alert_rules (
-			user_id,
-			mac,
-			metric,
-			operator,
-			threshold,
-			cooldown_duration,
-			enabled
-		)
-		VALUES ($1, $2, $3, $4, $5, make_interval(secs => $6::double precision), $7)
-		RETURNING
-			id,
-			user_id,
-			mac,
-			metric,
-			operator,
-			threshold,
-			EXTRACT(EPOCH FROM cooldown_duration)::bigint,
-			enabled,
-			NULL::timestamptz,
-			NULL::double precision,
-			created_at,
-			updated_at
-	`, defaultUserID, strings.ToLower(req.MAC), req.Metric, req.Operator, *req.Threshold, float64(cooldownSeconds), enabled)
-	rule, err := scanAlertRule(row)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "create alert rule")
-		return
-	}
-	writeJSON(w, http.StatusCreated, rule)
-}
-
-func (api *apiServer) handleUpdateAlertRule(w http.ResponseWriter, r *http.Request) {
-	id, ok := parseID(w, r.PathValue("id"))
-	if !ok {
-		return
-	}
-	req, ok := decodeAlertRuleRequest(w, r, false)
-	if !ok {
-		return
-	}
-	enabled := true
-	if req.Enabled != nil {
-		enabled = *req.Enabled
-	}
-	cooldownSeconds := int64(24 * 60 * 60)
-	if req.CooldownSeconds != nil {
-		cooldownSeconds = *req.CooldownSeconds
-	}
-
-	row := api.db.QueryRow(r.Context(), `
-		UPDATE alert_rules
-		SET
-			mac = $3,
-			metric = $4,
-			operator = $5,
-			threshold = $6,
-			cooldown_duration = make_interval(secs => $7::double precision),
-			enabled = $8,
-			updated_at = now()
-		WHERE id = $1 AND user_id = $2
-		RETURNING
-			id,
-			user_id,
-			mac,
-			metric,
-			operator,
-			threshold,
-			EXTRACT(EPOCH FROM cooldown_duration)::bigint,
-			enabled,
-			NULL::timestamptz,
-			NULL::double precision,
-			created_at,
-			updated_at
-	`, id, defaultUserID, strings.ToLower(req.MAC), req.Metric, req.Operator, *req.Threshold, float64(cooldownSeconds), enabled)
-	rule, err := scanAlertRule(row)
-	if errors.Is(err, pgx.ErrNoRows) {
-		writeError(w, http.StatusNotFound, "alert rule not found")
-		return
-	}
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "update alert rule")
-		return
-	}
-	writeJSON(w, http.StatusOK, rule)
-}
-
-func (api *apiServer) handleDeleteAlertRule(w http.ResponseWriter, r *http.Request) {
-	id, ok := parseID(w, r.PathValue("id"))
-	if !ok {
-		return
-	}
-	tag, err := api.db.Exec(r.Context(), `
-		DELETE FROM alert_rules
-		WHERE id = $1 AND user_id = $2
-	`, id, defaultUserID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "delete alert rule")
-		return
-	}
-	if tag.RowsAffected() == 0 {
-		writeError(w, http.StatusNotFound, "alert rule not found")
-		return
-	}
-	w.WriteHeader(http.StatusNoContent)
-}
-
-func (api *apiServer) handleResetAlertRuleCooldown(w http.ResponseWriter, r *http.Request) {
-	id, ok := parseID(w, r.PathValue("id"))
-	if !ok {
-		return
-	}
-
-	var exists bool
-	if err := api.db.QueryRow(r.Context(), `
-		SELECT EXISTS (
-			SELECT 1
-			FROM alert_rules
-			WHERE id = $1 AND user_id = $2
-		)
-	`, id, defaultUserID).Scan(&exists); err != nil {
-		writeError(w, http.StatusInternalServerError, "query alert rule")
-		return
-	}
-	if !exists {
-		writeError(w, http.StatusNotFound, "alert rule not found")
-		return
-	}
-
-	if _, err := api.db.Exec(r.Context(), `
-		UPDATE alert_rule_state
-		SET last_notified_at = NULL,
-			updated_at = now()
-		WHERE alert_rule_id = $1
-	`, id); err != nil {
-		writeError(w, http.StatusInternalServerError, "reset alert rule cooldown")
-		return
-	}
-	w.WriteHeader(http.StatusNoContent)
-}
-
-func (api *apiServer) handleNotificationEvents(w http.ResponseWriter, r *http.Request) {
-	limit := int64(50)
-	if raw := r.URL.Query().Get("limit"); raw != "" {
-		parsed, err := strconv.ParseInt(raw, 10, 64)
-		if err != nil || parsed < 1 || parsed > 500 {
-			writeError(w, http.StatusBadRequest, "limit must be between 1 and 500")
-			return
-		}
-		limit = parsed
-	}
-	status := strings.TrimSpace(r.URL.Query().Get("status"))
-	if status != "" && !validNotificationStatus(status) {
-		writeError(w, http.StatusBadRequest, "unsupported status")
-		return
-	}
-	mac := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("mac")))
-	ruleID, hasRuleID, ok := optionalInt64(w, r.URL.Query().Get("alert_rule_id"), "alert_rule_id")
-	if !ok {
-		return
-	}
-
-	rows, err := api.db.Query(r.Context(), `
-		SELECT
-			id,
-			alert_rule_id,
-			user_id,
-			mac,
-			metric,
-			value,
-			threshold,
-			triggered_at,
-			sent_at,
-			status,
-			error_message,
-			created_at
-		FROM notification_events
-		WHERE user_id = $1
-			AND ($2 = '' OR status = $2)
-			AND ($3 = '' OR mac = $3)
-			AND ($4::boolean = false OR alert_rule_id = $5)
-		ORDER BY created_at DESC
-		LIMIT $6
-	`, defaultUserID, status, mac, hasRuleID, ruleID, limit)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "query notification events")
-		return
-	}
-	defer rows.Close()
-
-	events := []notificationEventResponse{}
-	for rows.Next() {
-		event, err := scanNotificationEvent(rows)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "scan notification events")
-			return
-		}
-		events = append(events, event)
-	}
-	if err := rows.Err(); err != nil {
-		writeError(w, http.StatusInternalServerError, "read notification events")
-		return
-	}
-	writeJSON(w, http.StatusOK, events)
-}
-
-func (api *apiServer) handleDeleteNotificationEvents(w http.ResponseWriter, r *http.Request) {
-	if _, err := api.db.Exec(r.Context(), `
-		DELETE FROM notification_events
-		WHERE user_id = $1
-	`, defaultUserID); err != nil {
-		writeError(w, http.StatusInternalServerError, "delete notification events")
-		return
-	}
-	w.WriteHeader(http.StatusNoContent)
 }
 
 func (api *apiServer) handleEnergyLatest(w http.ResponseWriter, r *http.Request) {
@@ -959,500 +556,19 @@ func (api *apiServer) handleEnergySeries(w http.ResponseWriter, r *http.Request)
 	})
 }
 
-func (api *apiServer) handleIOSDevices(w http.ResponseWriter, r *http.Request) {
-	rows, err := api.db.Query(r.Context(), `
-		SELECT
-			id,
-			user_id,
-			apns_device_token,
-			app_bundle_id,
-			apns_environment,
-			device_name,
-			enabled,
-			disabled_reason,
-			disabled_at,
-			last_seen_at,
-			created_at,
-			updated_at
-		FROM ios_devices
-		WHERE user_id = $1
-		ORDER BY id
-	`, defaultUserID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "query ios devices")
-		return
-	}
-	defer rows.Close()
-
-	devices := []iosDeviceResponse{}
-	for rows.Next() {
-		device, err := scanIOSDevice(rows)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "scan ios devices")
-			return
-		}
-		devices = append(devices, device)
-	}
-	if err := rows.Err(); err != nil {
-		writeError(w, http.StatusInternalServerError, "read ios devices")
-		return
-	}
-	writeJSON(w, http.StatusOK, devices)
-}
-
-func (api *apiServer) handleRegisterIOSDevice(w http.ResponseWriter, r *http.Request) {
-	req, ok := decodeIOSDeviceRequest(w, r)
-	if !ok {
-		return
-	}
-	enabled := true
-	if req.Enabled != nil {
-		enabled = *req.Enabled
-	}
-	row := api.db.QueryRow(r.Context(), `
-		INSERT INTO ios_devices (
-			user_id,
-			apns_device_token,
-			app_bundle_id,
-			apns_environment,
-			device_name,
-			enabled,
-			last_seen_at
-		)
-		VALUES ($1, $2, $3, $4, $5, $6, now())
-		ON CONFLICT (apns_device_token, app_bundle_id, apns_environment) DO UPDATE SET
-			user_id = EXCLUDED.user_id,
-			device_name = EXCLUDED.device_name,
-			enabled = EXCLUDED.enabled,
-			disabled_reason = CASE WHEN EXCLUDED.enabled THEN NULL ELSE ios_devices.disabled_reason END,
-			disabled_at = CASE WHEN EXCLUDED.enabled THEN NULL ELSE ios_devices.disabled_at END,
-			last_seen_at = now(),
-			updated_at = now()
-		RETURNING
-			id,
-			user_id,
-			apns_device_token,
-			app_bundle_id,
-			apns_environment,
-			device_name,
-			enabled,
-			disabled_reason,
-			disabled_at,
-			last_seen_at,
-			created_at,
-			updated_at
-	`, defaultUserID, req.APNSDeviceToken, req.AppBundleID, req.APNSEnvironment, req.DeviceName, enabled)
-	device, err := scanIOSDevice(row)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "register ios device")
-		return
-	}
-	writeJSON(w, http.StatusCreated, device)
-}
-
-func (api *apiServer) handleUpdateIOSDevice(w http.ResponseWriter, r *http.Request) {
-	id, ok := parseID(w, r.PathValue("id"))
-	if !ok {
-		return
-	}
-	req, ok := decodeIOSDeviceRequest(w, r)
-	if !ok {
-		return
-	}
-	enabled := true
-	if req.Enabled != nil {
-		enabled = *req.Enabled
-	}
-	row := api.db.QueryRow(r.Context(), `
-		UPDATE ios_devices
-		SET
-			apns_device_token = $3,
-			app_bundle_id = $4,
-			apns_environment = $5,
-			device_name = $6,
-			enabled = $7,
-			disabled_reason = CASE WHEN $7 THEN NULL ELSE disabled_reason END,
-			disabled_at = CASE WHEN $7 THEN NULL ELSE disabled_at END,
-			last_seen_at = now(),
-			updated_at = now()
-		WHERE id = $1 AND user_id = $2
-		RETURNING
-			id,
-			user_id,
-			apns_device_token,
-			app_bundle_id,
-			apns_environment,
-			device_name,
-			enabled,
-			disabled_reason,
-			disabled_at,
-			last_seen_at,
-			created_at,
-			updated_at
-	`, id, defaultUserID, req.APNSDeviceToken, req.AppBundleID, req.APNSEnvironment, req.DeviceName, enabled)
-	device, err := scanIOSDevice(row)
-	if errors.Is(err, pgx.ErrNoRows) {
-		writeError(w, http.StatusNotFound, "ios device not found")
-		return
-	}
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "update ios device")
-		return
-	}
-	writeJSON(w, http.StatusOK, device)
-}
-
-func (api *apiServer) handleDeleteIOSDevice(w http.ResponseWriter, r *http.Request) {
-	id, ok := parseID(w, r.PathValue("id"))
-	if !ok {
-		return
-	}
-	tag, err := api.db.Exec(r.Context(), `
-		DELETE FROM ios_devices
-		WHERE id = $1 AND user_id = $2
-	`, id, defaultUserID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "delete ios device")
-		return
-	}
-	if tag.RowsAffected() == 0 {
-		writeError(w, http.StatusNotFound, "ios device not found")
-		return
-	}
-	w.WriteHeader(http.StatusNoContent)
-}
-
-func (api *apiServer) handleTestIOSDeviceNotification(w http.ResponseWriter, r *http.Request) {
-	if api.apns == nil {
-		writeError(w, http.StatusServiceUnavailable, "APNs test sender is not configured")
-		return
-	}
-	id, ok := parseID(w, r.PathValue("id"))
-	if !ok {
-		return
-	}
-	target, err := api.apns.loadTarget(r.Context(), api.db, defaultUserID, id)
-	if errors.Is(err, pgx.ErrNoRows) {
-		writeError(w, http.StatusNotFound, "ios device not found")
-		return
-	}
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "query ios device")
-		return
-	}
-	if !target.Enabled {
-		writeError(w, http.StatusBadRequest, "ios device is disabled")
-		return
-	}
-	if target.AppBundleID != api.apns.bundleID {
-		writeError(w, http.StatusBadRequest, "ios device does not match APNs bundle")
-		return
-	}
-	event, err := api.loadTestNotificationEvent(r.Context())
-	if errors.Is(err, pgx.ErrNoRows) {
-		writeError(w, http.StatusNotFound, "test notification event not found")
-		return
-	}
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "query test notification event")
-		return
-	}
-	now := time.Now()
-	if err := api.apns.send(r.Context(), api.db, target, event, now); err != nil {
-		writeError(w, http.StatusBadGateway, err.Error())
-		return
-	}
-	writeJSON(w, http.StatusOK, testNotificationResponse{
-		ID:                         target.ID,
-		DeviceName:                 target.DeviceName,
-		AppBundleID:                target.AppBundleID,
-		APNSEnvironment:            target.APNSEnvironment,
-		NotificationEventID:        event.ID,
-		NotificationEventCreatedAt: event.CreatedAt,
-		Status:                     "sent",
-		SentAt:                     &now,
-	})
-}
-
-func (api *apiServer) loadTestNotificationEvent(ctx context.Context) (testNotificationEvent, error) {
-	if rawCreatedAt := strings.TrimSpace(os.Getenv(testNotificationEventCreatedAtEnv)); rawCreatedAt != "" {
-		eventCreatedAt, err := time.Parse(time.RFC3339Nano, rawCreatedAt)
-		if err != nil {
-			return testNotificationEvent{}, fmt.Errorf("parse %s: %w", testNotificationEventCreatedAtEnv, err)
-		}
-		row := api.db.QueryRow(ctx, `
-			SELECT
-				id,
-				alert_rule_id,
-				user_id,
-				mac,
-				metric,
-				value,
-				threshold,
-				triggered_at,
-				sent_at,
-				status,
-				error_message,
-				created_at
-			FROM notification_events
-			WHERE user_id = $1
-				AND created_at = $2
-			LIMIT 1
-		`, defaultUserID, eventCreatedAt)
-		return scanTestNotificationEvent(row)
-	}
-	row := api.db.QueryRow(ctx, `
-		SELECT
-			id,
-			alert_rule_id,
-			user_id,
-			mac,
-			metric,
-			value,
-			threshold,
-			triggered_at,
-			sent_at,
-			status,
-			error_message,
-			created_at
-		FROM notification_events
-		WHERE user_id = $1
-		ORDER BY created_at DESC
-		LIMIT 1
-	`, defaultUserID)
-	return scanTestNotificationEvent(row)
-}
-
 func (api *apiServer) loadDevice(ctx context.Context, mac string) (deviceResponse, error) {
 	var d deviceResponse
-	var maintenanceSince pgtype.Timestamptz
 	err := api.db.QueryRow(ctx, `
 		SELECT
 			mac,
 			label,
 			COALESCE(sensor_category, ''),
 			COALESCE(location, ''),
-			enabled,
-			maintenance_mode,
-			COALESCE(maintenance_reason, ''),
-			maintenance_since
+			enabled
 		FROM devices
 		WHERE mac = $1
-	`, mac).Scan(&d.MAC, &d.Label, &d.SensorCategory, &d.Location, &d.Enabled, &d.MaintenanceMode, &d.MaintenanceReason, &maintenanceSince)
-	d.MaintenanceSince = timePtrFromPg(maintenanceSince)
+	`, mac).Scan(&d.MAC, &d.Label, &d.SensorCategory, &d.Location, &d.Enabled)
 	return d, err
-}
-
-type scanner interface {
-	Scan(dest ...any) error
-}
-
-func scanAlertRule(row scanner) (alertRuleResponse, error) {
-	var rule alertRuleResponse
-	var lastNotifiedAt pgtype.Timestamptz
-	var lastValue pgtype.Float8
-	if err := row.Scan(
-		&rule.ID,
-		&rule.UserID,
-		&rule.MAC,
-		&rule.Metric,
-		&rule.Operator,
-		&rule.Threshold,
-		&rule.CooldownSeconds,
-		&rule.Enabled,
-		&lastNotifiedAt,
-		&lastValue,
-		&rule.CreatedAt,
-		&rule.UpdatedAt,
-	); err != nil {
-		return alertRuleResponse{}, err
-	}
-	if lastNotifiedAt.Valid {
-		rule.LastNotifiedAt = &lastNotifiedAt.Time
-	}
-	if lastValue.Valid {
-		rule.LastValue = &lastValue.Float64
-	}
-	return rule, nil
-}
-
-func scanIOSDevice(row scanner) (iosDeviceResponse, error) {
-	var device iosDeviceResponse
-	var deviceName pgtype.Text
-	var disabledReason pgtype.Text
-	var disabledAt pgtype.Timestamptz
-	var lastSeenAt pgtype.Timestamptz
-	if err := row.Scan(
-		&device.ID,
-		&device.UserID,
-		&device.APNSDeviceToken,
-		&device.AppBundleID,
-		&device.APNSEnvironment,
-		&deviceName,
-		&device.Enabled,
-		&disabledReason,
-		&disabledAt,
-		&lastSeenAt,
-		&device.CreatedAt,
-		&device.UpdatedAt,
-	); err != nil {
-		return iosDeviceResponse{}, err
-	}
-	if deviceName.Valid {
-		device.DeviceName = &deviceName.String
-	}
-	if disabledReason.Valid {
-		device.DisabledReason = &disabledReason.String
-	}
-	if disabledAt.Valid {
-		device.DisabledAt = &disabledAt.Time
-	}
-	if lastSeenAt.Valid {
-		device.LastSeenAt = &lastSeenAt.Time
-	}
-	return device, nil
-}
-
-func scanNotificationEvent(row scanner) (notificationEventResponse, error) {
-	var event notificationEventResponse
-	var alertRuleID pgtype.Int8
-	var userID pgtype.Int8
-	var value pgtype.Float8
-	var threshold pgtype.Float8
-	var sentAt pgtype.Timestamptz
-	var errorMessage pgtype.Text
-	if err := row.Scan(
-		&event.ID,
-		&alertRuleID,
-		&userID,
-		&event.MAC,
-		&event.Metric,
-		&value,
-		&threshold,
-		&event.TriggeredAt,
-		&sentAt,
-		&event.Status,
-		&errorMessage,
-		&event.CreatedAt,
-	); err != nil {
-		return notificationEventResponse{}, err
-	}
-	if alertRuleID.Valid {
-		event.AlertRuleID = &alertRuleID.Int64
-	}
-	if userID.Valid {
-		event.UserID = &userID.Int64
-	}
-	if value.Valid {
-		event.Value = &value.Float64
-	}
-	if threshold.Valid {
-		event.Threshold = &threshold.Float64
-	}
-	if sentAt.Valid {
-		event.SentAt = &sentAt.Time
-	}
-	if errorMessage.Valid {
-		event.ErrorMessage = &errorMessage.String
-	}
-	return event, nil
-}
-
-func scanTestNotificationEvent(row scanner) (testNotificationEvent, error) {
-	var event testNotificationEvent
-	var alertRuleID pgtype.Int8
-	var userID pgtype.Int8
-	var value pgtype.Float8
-	var threshold pgtype.Float8
-	var sentAt pgtype.Timestamptz
-	var errorMessage pgtype.Text
-	if err := row.Scan(
-		&event.ID,
-		&alertRuleID,
-		&userID,
-		&event.MAC,
-		&event.Metric,
-		&value,
-		&threshold,
-		&event.TriggeredAt,
-		&sentAt,
-		&event.Status,
-		&errorMessage,
-		&event.CreatedAt,
-	); err != nil {
-		return testNotificationEvent{}, err
-	}
-	if alertRuleID.Valid {
-		event.AlertRuleID = &alertRuleID.Int64
-	}
-	if userID.Valid {
-		event.UserID = &userID.Int64
-	}
-	if value.Valid {
-		event.Value = &value.Float64
-	}
-	if threshold.Valid {
-		event.Threshold = &threshold.Float64
-	}
-	if sentAt.Valid {
-		event.SentAt = &sentAt.Time
-	}
-	if errorMessage.Valid {
-		event.ErrorMessage = &errorMessage.String
-	}
-	return event, nil
-}
-
-func decodeAlertRuleRequest(w http.ResponseWriter, r *http.Request, partial bool) (alertRuleRequest, bool) {
-	var req alertRuleRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid json")
-		return req, false
-	}
-	req.MAC = strings.ToLower(strings.TrimSpace(req.MAC))
-	req.Metric = strings.TrimSpace(req.Metric)
-	req.Operator = strings.TrimSpace(req.Operator)
-	if !partial {
-		if req.MAC == "" || req.Metric == "" || req.Operator == "" || req.Threshold == nil {
-			writeError(w, http.StatusBadRequest, "mac, metric, operator, and threshold are required")
-			return req, false
-		}
-	}
-	if req.Metric != "" {
-		if _, ok := metricColumns[req.Metric]; !ok {
-			writeError(w, http.StatusBadRequest, "unsupported metric")
-			return req, false
-		}
-	}
-	if req.Operator != "" && !validOperator(req.Operator) {
-		writeError(w, http.StatusBadRequest, "unsupported operator")
-		return req, false
-	}
-	if req.CooldownSeconds != nil && *req.CooldownSeconds < 0 {
-		writeError(w, http.StatusBadRequest, "cooldown_seconds must be non-negative")
-		return req, false
-	}
-	return req, true
-}
-
-func decodeIOSDeviceRequest(w http.ResponseWriter, r *http.Request) (iosDeviceRequest, bool) {
-	var req iosDeviceRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid json")
-		return req, false
-	}
-	req.APNSDeviceToken = strings.TrimSpace(req.APNSDeviceToken)
-	req.AppBundleID = strings.TrimSpace(req.AppBundleID)
-	req.APNSEnvironment = strings.TrimSpace(req.APNSEnvironment)
-	if req.APNSDeviceToken == "" || req.AppBundleID == "" || req.APNSEnvironment == "" {
-		writeError(w, http.StatusBadRequest, "apns_device_token, app_bundle_id, and apns_environment are required")
-		return req, false
-	}
-	if req.APNSEnvironment != "sandbox" && req.APNSEnvironment != "production" {
-		writeError(w, http.StatusBadRequest, "apns_environment must be sandbox or production")
-		return req, false
-	}
-	return req, true
 }
 
 func parseAllowedOrigins(raw string) map[string]bool {
@@ -1500,46 +616,6 @@ func redactDSN(dsn string) string {
 		return ""
 	}
 	return "configured"
-}
-
-func parseID(w http.ResponseWriter, raw string) (int64, bool) {
-	id, err := strconv.ParseInt(raw, 10, 64)
-	if err != nil || id <= 0 {
-		writeError(w, http.StatusBadRequest, "invalid id")
-		return 0, false
-	}
-	return id, true
-}
-
-func optionalInt64(w http.ResponseWriter, raw string, name string) (int64, bool, bool) {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return 0, false, true
-	}
-	value, err := strconv.ParseInt(raw, 10, 64)
-	if err != nil || value <= 0 {
-		writeError(w, http.StatusBadRequest, "invalid "+name)
-		return 0, false, false
-	}
-	return value, true, true
-}
-
-func validOperator(operator string) bool {
-	switch operator {
-	case ">", ">=", "<", "<=":
-		return true
-	default:
-		return false
-	}
-}
-
-func validNotificationStatus(status string) bool {
-	switch status {
-	case "pending", "dry_run", "sent", "failed", "skipped":
-		return true
-	default:
-		return false
-	}
 }
 
 func floatPtrFromPg(value pgtype.Float8) *float64 {

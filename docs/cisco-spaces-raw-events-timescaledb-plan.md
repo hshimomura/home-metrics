@@ -41,7 +41,7 @@ hm-cisco-spaces-processor
         ↓
 sensor_minute / devices
         ↓
-API / UI / alert-worker
+API / UI / collector status
 
 debug / replay / export tools
         ↑
@@ -192,8 +192,8 @@ retention は `hm-db-migrate` か追加 migration で設定する。既存 produ
 failure policy:
 
 - DB が一時的に落ちている場合は同期 retry / reconnect する。
-- DB insert 失敗を silently ignore しない。失敗継続は `collector_status` と health alert で
-  data-loss risk として通知する。
+- DB insert 失敗を silently ignore しない。失敗継続は `collector_status` で
+  data-loss risk として見えるようにする。
 - HTTP stream から event を読んだ後、DB insert 前に process が落ちるケースまでは
   初期実装では完全には防がない。
 - 完全な no-drop を目指す場合は local disk spool が必要になる。これは初期 PR の範囲外。
@@ -319,18 +319,8 @@ hm-cisco-spaces-receiver / cisco_spaces_firehose / default
 hm-cisco-spaces-processor / cisco_spaces_raw_events / default
 ```
 
-追加する health alert:
-
-- receiver heartbeat stale
-- raw event data stale
-- processor heartbeat stale
-- processor stale は processor 分離後に追加する。
-
-admin webhook payload には以下を入れる:
-
-- latest received_at
-- raw event count
-- suggested action: export raw events / inspect receiver error
+admin visibility は `collector_status` を主にする。alarm や admin webhook は
+実装しない。
 
 ## 運用コマンド例
 

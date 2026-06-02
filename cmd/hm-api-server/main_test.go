@@ -1,35 +1,12 @@
 package main
 
 import (
-	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 )
-
-func TestValidOperator(t *testing.T) {
-	for _, operator := range []string{">", ">=", "<", "<="} {
-		if !validOperator(operator) {
-			t.Fatalf("validOperator(%q) = false, want true", operator)
-		}
-	}
-	if validOperator("=") {
-		t.Fatal("validOperator(\"=\") = true, want false")
-	}
-}
-
-func TestValidNotificationStatus(t *testing.T) {
-	for _, status := range []string{"pending", "dry_run", "sent", "failed", "skipped"} {
-		if !validNotificationStatus(status) {
-			t.Fatalf("validNotificationStatus(%q) = false, want true", status)
-		}
-	}
-	if validNotificationStatus("would_send") {
-		t.Fatal("validNotificationStatus(\"would_send\") = true, want false")
-	}
-}
 
 func TestParseAllowedOrigins(t *testing.T) {
 	origins := parseAllowedOrigins("https://example.test, http://localhost:3000,")
@@ -119,38 +96,6 @@ func TestEnergySeriesResponseIncludesUnit(t *testing.T) {
 	}
 }
 
-func TestAPNSHost(t *testing.T) {
-	if got := apnsHost("production"); got != apnsProductionHost {
-		t.Fatalf("production host = %q, want %q", got, apnsProductionHost)
-	}
-	if got := apnsHost("sandbox"); got != apnsSandboxHost {
-		t.Fatalf("sandbox host = %q, want %q", got, apnsSandboxHost)
-	}
-	if got := apnsHost(""); got != apnsSandboxHost {
-		t.Fatalf("empty environment host = %q, want %q", got, apnsSandboxHost)
-	}
-}
-
-func TestAlertContentUsesShortMetricNames(t *testing.T) {
-	value := 20.9
-	title, body := alertContent("Env", "temperature_c", &value)
-	if title != "Env Temp alert" {
-		t.Fatalf("title = %q, want Env Temp alert", title)
-	}
-	if body != "Current Temp is 20.9 °C." {
-		t.Fatalf("body = %q, want short temperature body", body)
-	}
-
-	value = 55
-	title, body = alertContent("Desk", "humidity_percent", &value)
-	if title != "Desk Hum alert" {
-		t.Fatalf("title = %q, want Desk Hum alert", title)
-	}
-	if body != "Current Hum is 55 %." {
-		t.Fatalf("body = %q, want short humidity body", body)
-	}
-}
-
 func TestUnsupportedAPIEndpointReturnsJSONError(t *testing.T) {
 	api := &apiServer{}
 	req := httptest.NewRequest(http.MethodGet, "/api/not-supported", nil)
@@ -163,26 +108,5 @@ func TestUnsupportedAPIEndpointReturnsJSONError(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), `"error":"unsupported endpoint"`) {
 		t.Fatalf("unexpected body: %s", rec.Body.String())
-	}
-}
-
-func TestDeleteHealthNotificationEventsReturnsNoContent(t *testing.T) {
-	req := httptest.NewRequest(http.MethodDelete, "/api/admin/health-notification-events", nil)
-	rec := httptest.NewRecorder()
-	called := false
-
-	handleDeleteHealthNotificationEvents(rec, req, func(context.Context) error {
-		called = true
-		return nil
-	})
-
-	if !called {
-		t.Fatal("delete function was not called")
-	}
-	if rec.Code != http.StatusNoContent {
-		t.Fatalf("status = %d, want %d", rec.Code, http.StatusNoContent)
-	}
-	if rec.Body.Len() != 0 {
-		t.Fatalf("body = %q, want empty", rec.Body.String())
 	}
 }

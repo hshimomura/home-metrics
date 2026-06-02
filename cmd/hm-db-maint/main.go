@@ -24,7 +24,6 @@ func main() {
 		dsn = defaultDBDSN
 	}
 	retainMinute := envDuration("DB_MAINT_RETAIN_MINUTE", 14*24*time.Hour)
-	retainHealthNotificationEvents := envDuration("DB_MAINT_RETAIN_HEALTH_NOTIFICATION_EVENTS", 7*24*time.Hour)
 	refreshLookback := envDuration("DB_MAINT_REFRESH_LOOKBACK", 48*time.Hour)
 
 	db, err := pgx.Connect(ctx, dsn)
@@ -39,13 +38,6 @@ func main() {
 	if err := retainSensorMinute(ctx, db, retainMinute); err != nil {
 		log.Fatalf("retain sensor_minute: %v", err)
 	}
-	if err := retainHealthNotificationEventHistory(ctx, db, retainHealthNotificationEvents); err != nil {
-		log.Fatalf("retain health_notification_events: %v", err)
-	}
-}
-
-type execer interface {
-	Exec(ctx context.Context, sql string, arguments ...any) (pgconn.CommandTag, error)
 }
 
 func envDuration(name string, fallback time.Duration) time.Duration {
@@ -59,6 +51,10 @@ func envDuration(name string, fallback time.Duration) time.Duration {
 		return fallback
 	}
 	return parsed
+}
+
+type execer interface {
+	Exec(ctx context.Context, sql string, arguments ...any) (pgconn.CommandTag, error)
 }
 
 func refreshRollups(ctx context.Context, db *pgx.Conn, lookback time.Duration) error {
@@ -123,7 +119,7 @@ func refreshRollup(ctx context.Context, db *pgx.Conn, target string, bucket stri
 	return nil
 }
 
-func retainSensorMinute(ctx context.Context, db *pgx.Conn, retain time.Duration) error {
+func retainSensorMinute(ctx context.Context, db execer, retain time.Duration) error {
 	tag, err := db.Exec(ctx, `
 		DELETE FROM sensor_minute
 		WHERE ts < now() - $1::interval
@@ -132,18 +128,6 @@ func retainSensorMinute(ctx context.Context, db *pgx.Conn, retain time.Duration)
 		return err
 	}
 	log.Printf("retained sensor_minute retain=%s deleted=%d", retain, tag.RowsAffected())
-	return nil
-}
-
-func retainHealthNotificationEventHistory(ctx context.Context, db execer, retain time.Duration) error {
-	tag, err := db.Exec(ctx, `
-		DELETE FROM health_notification_events
-		WHERE created_at < now() - $1::interval
-	`, intervalSeconds(retain))
-	if err != nil {
-		return err
-	}
-	log.Printf("retained health_notification_events retain=%s deleted=%d", retain, tag.RowsAffected())
 	return nil
 }
 

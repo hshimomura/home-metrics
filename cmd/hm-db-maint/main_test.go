@@ -20,17 +20,17 @@ func (f *fakeMaintExecer) Exec(_ context.Context, sql string, args ...any) (pgco
 	return pgconn.NewCommandTag("DELETE 2"), nil
 }
 
-func TestRetainHealthNotificationEventHistoryDeletesOldRows(t *testing.T) {
+func TestRetainSensorMinuteDeletesOldRows(t *testing.T) {
 	db := &fakeMaintExecer{}
-	retain := 7 * 24 * time.Hour
-	if err := retainHealthNotificationEventHistory(context.Background(), db, retain); err != nil {
-		t.Fatalf("retainHealthNotificationEventHistory returned error: %v", err)
+	retain := 14 * 24 * time.Hour
+	if err := retainSensorMinute(context.Background(), db, retain); err != nil {
+		t.Fatalf("retainSensorMinute returned error: %v", err)
 	}
-	if !strings.Contains(db.sql, "DELETE FROM health_notification_events") {
+	if !strings.Contains(db.sql, "DELETE FROM sensor_minute") {
 		t.Fatalf("unexpected SQL: %s", db.sql)
 	}
-	if !strings.Contains(db.sql, "created_at < now() - $1::interval") {
-		t.Fatalf("SQL must delete by created_at retention: %s", db.sql)
+	if !strings.Contains(db.sql, "ts < now() - $1::interval") {
+		t.Fatalf("SQL must delete by ts retention: %s", db.sql)
 	}
 	if len(db.args) != 1 || db.args[0] != intervalSeconds(retain) {
 		t.Fatalf("args = %#v, want retain interval", db.args)
