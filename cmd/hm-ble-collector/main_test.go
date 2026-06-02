@@ -61,6 +61,27 @@ func TestSanitizeReadingDropsSentinelsAndImplausibleValues(t *testing.T) {
 	}
 }
 
+func TestDecodeServiceDataExtractsEnvGasValues(t *testing.T) {
+	got := decodeServiceData("0305177bd47b44041f071a0403ff00000313991303200a00")
+	if got.PressureHPa == nil || *got.PressureHPa != 1007.32 {
+		t.Fatalf("pressure=%v, want 1007.32", got.PressureHPa)
+	}
+	if got.TemperatureC == nil || *got.TemperatureC != 19.6 {
+		t.Fatalf("temperature=%v, want 19.6", got.TemperatureC)
+	}
+	if got.CO2PPM == nil || *got.CO2PPM != 1050 {
+		t.Fatalf("co2=%v, want 1050", got.CO2PPM)
+	}
+	if got.Lux == nil || *got.Lux != 10 {
+		t.Fatalf("lux=%v, want 10", got.Lux)
+	}
+
+	got = decodeServiceData("0305177bd47b44041f08070003ff00000313991303200a00")
+	if got.ETVOC == nil || *got.ETVOC != 7 {
+		t.Fatalf("etvoc=%v, want 7", got.ETVOC)
+	}
+}
+
 func testCollector() *collector {
 	return &collector{
 		outliers: outlierConfig{

@@ -64,7 +64,7 @@ func TestDecodeBLEPayloadExtractsAdvertisementServiceData(t *testing.T) {
 }
 
 func TestDecodeBLEPayloadExtractsEnvServiceData(t *testing.T) {
-	adv := mustHex(t, "0201061b166afe0305177bd47b44041f08070003ff00000313991303200a00")
+	adv := mustHex(t, "0201061b166afe0305177bd47b44041f071a0403ff00000313991303200a00")
 	got := decodeBLEPayload(adv)
 	if got.TemperatureC == nil || *got.TemperatureC != 19.6 {
 		t.Fatalf("temperature=%v, want 19.6", got.TemperatureC)
@@ -72,17 +72,17 @@ func TestDecodeBLEPayloadExtractsEnvServiceData(t *testing.T) {
 	if got.PressureHPa == nil || *got.PressureHPa != 1007.32 {
 		t.Fatalf("pressure=%v, want 1007.32", got.PressureHPa)
 	}
-	if got.CO2PPM == nil || *got.CO2PPM != 7 {
-		t.Fatalf("co2=%v, want 7", got.CO2PPM)
+	if got.CO2PPM == nil || *got.CO2PPM != 1050 {
+		t.Fatalf("co2=%v, want 1050", got.CO2PPM)
 	}
 	if got.Lux == nil || *got.Lux != 10 {
 		t.Fatalf("lux=%v, want 10", got.Lux)
 	}
 
-	adv = mustHex(t, "0201061b166afe0305177bd47b44041f071a0403ff00000313991303200a00")
+	adv = mustHex(t, "0201061b166afe0305177bd47b44041f08070003ff00000313991303200a00")
 	got = decodeBLEPayload(adv)
-	if got.ETVOC == nil || *got.ETVOC != 1050 {
-		t.Fatalf("etvoc=%v, want 1050", got.ETVOC)
+	if got.ETVOC == nil || *got.ETVOC != 7 {
+		t.Fatalf("etvoc=%v, want 7", got.ETVOC)
 	}
 }
 

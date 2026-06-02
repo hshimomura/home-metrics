@@ -816,9 +816,9 @@ func decodeServiceData(payloadHex string) bleReading {
 			subtype := data[idx+2]
 			value := float64(uint16(data[idx+3]) | uint16(data[idx+4])<<8)
 			switch subtype {
-			case 0x08:
-				r.CO2PPM = floatPtr(value)
 			case 0x07:
+				r.CO2PPM = floatPtr(value)
+			case 0x08:
 				r.ETVOC = floatPtr(value)
 			}
 		}

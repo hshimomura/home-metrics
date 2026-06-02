@@ -465,8 +465,8 @@ marker 解釈を使います。
 03 13 + int16 LE / 256 -> temperature_c
 02 12 + uint8          -> humidity_percent
 03 20 + uint16 LE      -> lux
-04 1f 08 + uint16 LE   -> co2_ppm
-04 1f 07 + uint16 LE   -> etvoc
+04 1f 07 + uint16 LE   -> co2_ppm
+04 1f 08 + uint16 LE   -> etvoc
 02 80 02 ...           -> battery_percent
 ```
 

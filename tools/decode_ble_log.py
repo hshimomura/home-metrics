@@ -81,9 +81,9 @@ def decode_service_data(hex_payload):
             value = int.from_bytes(data[gas_at + 3 : gas_at + 5], "little")
             decoded["gas_subtype"] = subtype
             decoded["gas_value"] = value
-            if subtype == 0x08:
+            if subtype == 0x07:
                 decoded["co2_ppm"] = value
-            elif subtype == 0x07:
+            elif subtype == 0x08:
                 decoded["etvoc"] = value
             else:
                 decoded["notes"].append(f"unmapped_hibou_gas_subtype=0x{subtype:02x}")
