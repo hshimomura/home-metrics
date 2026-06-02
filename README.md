@@ -273,6 +273,207 @@ advisory lock を取得します。同じ DB を使う別の `hm-cisco-spaces-co
 `BLE_SENSORS_FILE` の静的BLEセンサーを `devices` から外します。時系列データや
 alert rule がない行は削除し、残す必要がある行は `enabled=false` にします。
 
+## Cisco IoT Orchestrator Collector
+
+Cisco Sensor Connect / Wireless IoT Orchestrator の MQTT broker から BLE
+advertisement telemetry を購読し、既存の `devices` と `sensor_minute` に
+1 分値を書き込みます。Cisco Spaces Firehose と異なり、Orchestrator が送る
+protobuf `DataBatch` を decode し、BLE payload の `ServiceData` 相当を既存
+BLE importer と同じ形式で解釈します。raw telemetry は DB に保存しません。
+
+```bash
+BLE_DB_DSN='dbname=ble_sensors host=/var/run/postgresql' \
+SENSOR_INGEST_SOURCE=cisco_iot_orchestrator \
+CISCO_IOT_ORCH_API_URL='https://192.168.67.6:8081' \
+CISCO_IOT_ORCH_MQTT_ADDR='192.168.67.6:41883' \
+CISCO_IOT_ORCH_ONBOARD_APP_ID='onboard' \
+CISCO_IOT_ORCH_ONBOARD_API_KEY='...' \
+CISCO_IOT_ORCH_CONTROL_APP_ID='control' \
+CISCO_IOT_ORCH_CONTROL_API_KEY='...' \
+CISCO_IOT_ORCH_DATA_APP_ID='data' \
+CISCO_IOT_ORCH_DATA_API_KEY='...' \
+CISCO_IOT_ORCH_TOPIC='ioslab/home-metrics/ble/advertisements/v1' \
+hm-cisco-iot-orchestrator-collector
+```
+
+主な設定:
+
+```text
+CISCO_IOT_ORCH_API_URL
+CISCO_IOT_ORCH_MQTT_ADDR
+CISCO_IOT_ORCH_ONBOARD_APP_ID
+CISCO_IOT_ORCH_ONBOARD_API_KEY
+CISCO_IOT_ORCH_CONTROL_APP_ID
+CISCO_IOT_ORCH_CONTROL_API_KEY
+CISCO_IOT_ORCH_DATA_APP_ID
+CISCO_IOT_ORCH_DATA_API_KEY
+CISCO_IOT_ORCH_TOPIC
+CISCO_IOT_ORCH_REGISTER_DATA_APP
+CISCO_IOT_ORCH_DRY_RUN
+CISCO_IOT_ORCH_DEBUG
+CISCO_IOT_ORCH_STREAM_HEARTBEAT
+```
+
+MQTT は Orchestrator 側の broker へ subscriber として接続します。デフォルトの
+topic は `ioslab/home-metrics/ble/advertisements/v1` です。SCIM onboarding は
+`onboard` app、control API は `control` app、MQTT subscriber は data receiver
+app を使います。ioslab の試験環境では data receiver app ID に `data` を使います。
+`CISCO_IOT_ORCH_REGISTER_DATA_APP=true`
+の場合、起動時に `POST /control/registration/registerDataApp` を呼び、control
+app と data receiver app の topic 登録を行います。
+通常は Orchestrator UI/API 側で登録済みにしておき、この値は `false` のままで
+collector だけを起動します。
+
+### Cisco IoT Orchestrator setup
+
+Orchestrator から MQTT で BLE advertisement を受けるには、collector の起動前に
+Orchestrator 側で以下を順に登録します。
+
+1. SCIM で BLE device を onboard する
+2. `registerDataApp` で data receiver app と MQTT topic を紐付ける
+3. `registerTopic` で onboard 済み BLE device ID と advertisement topic を紐付ける
+
+`registerDataApp` と `registerTopic` は control app の API key で実行します。
+SCIM onboarding は onboarding app の API key で実行します。Orchestrator の
+証明書を信頼していない試験環境では `curl -k` を使います。本番では CA trust を
+入れて `-k` に依存しないようにします。
+
+SCIM onboarding body の例:
+
+```json
+{
+  "schemas": [
+    "urn:ietf:params:scim:schemas:core:2.0:Device",
+    "urn:ietf:params:scim:schemas:extension:ble:2.0:Device",
+    "urn:ietf:params:scim:schemas:extension:endpointAppsExt:2.0:Device"
+  ],
+  "deviceDisplayName": "home-metrics-00-fa-b6-07-de-4b",
+  "adminState": true,
+  "urn:ietf:params:scim:schemas:extension:ble:2.0:Device": {
+    "versionSupport": ["5.3"],
+    "deviceMacAddress": "00:FA:B6:07:DE:4B",
+    "isRandom": false,
+    "mobility": true,
+    "pairingMethods": [
+      "urn:ietf:params:scim:schemas:extension:pairingNull:2.0:Device"
+    ],
+    "urn:ietf:params:scim:schemas:extension:pairingNull:2.0:Device": {},
+    "urn:ietf:params:scim:schemas:extension:pairingJustWorks:2.0:Device": {
+      "key": 0
+    },
+    "urn:ietf:params:scim:schemas:extension:pairingPassKey:2.0:Device": {
+      "key": 0
+    },
+    "urn:ietf:params:scim:schemas:extension:pairingOOB:2.0:Device": {
+      "key": "",
+      "randNumber": 0,
+      "confirmationNumber": 0
+    }
+  },
+  "urn:ietf:params:scim:schemas:extension:endpointAppsExt:2.0:Device": {
+    "onboardingUrl": "onboard",
+    "deviceControlUrl": ["control"],
+    "dataReceiverUrl": ["data"]
+  }
+}
+```
+
+```bash
+curl -k -X POST "$CISCO_IOT_ORCH_API_URL/scim/v2/Devices" \
+  -H 'Content-Type: application/json' \
+  -H 'Accept: application/json' \
+  -H "x-api-key: $CISCO_IOT_ORCH_ONBOARD_API_KEY" \
+  --data-binary @device.json
+```
+
+`isRandom` は通常 `false` です。random/private/static address の device を
+onboard する場合だけ `true` を使います。実機では `versionSupport` と pairing
+extension を含めた body が安定して受理されました。
+
+Data receiver app 登録の例:
+
+```json
+{
+  "dataApps": [
+    {
+      "dataAppID": "data"
+    }
+  ],
+  "topic": "ioslab/home-metrics/ble/advertisements/v1",
+  "dataFormat": "default",
+  "controlApp": "control"
+}
+```
+
+```bash
+curl -k -X POST "$CISCO_IOT_ORCH_API_URL/control/registration/registerDataApp" \
+  -H 'Content-Type: application/json' \
+  -H 'Accept: application/json' \
+  -H "x-api-key: $CISCO_IOT_ORCH_CONTROL_API_KEY" \
+  --data-binary @register-dataapp.json
+```
+
+`dataApps` の要素は `{"dataAppID": "<app id>"}` です。`["data"]` や
+`{"app":"data"}` では実機 1.2.1 で `Missing dataApps` または
+`Maximum topic limit reached` になるため使いません。
+
+Topic 登録の例:
+
+```json
+{
+  "technology": "ble",
+  "id": "f2c551d1-6d42-41e1-85ce-82cdda2c84d8",
+  "controlApp": "control",
+  "ids": [
+    "f2c551d1-6d42-41e1-85ce-82cdda2c84d8",
+    "d96231e7-13b4-4ccd-bafa-ec5c60b95c88"
+  ],
+  "topic": "ioslab/home-metrics/ble/advertisements/v1",
+  "dataFormat": "default",
+  "ble": {
+    "type": "advertisements",
+    "serviceID": "FE6A",
+    "characteristicID": "0000"
+  }
+}
+```
+
+```bash
+curl -k -X POST "$CISCO_IOT_ORCH_API_URL/control/registration/registerTopic" \
+  -H 'Content-Type: application/json' \
+  -H 'Accept: application/json' \
+  -H "x-api-key: $CISCO_IOT_ORCH_CONTROL_API_KEY" \
+  --data-binary @register-topic.json
+```
+
+`ids` は SCIM onboarding response または `GET /scim/v2/Devices?onboardApp=onboard`
+で得られる Orchestrator の device UUID です。`id` には `ids` の先頭と同じ値を
+入れます。connectionless advertisement を MQTT へ流す用途では
+`ble.type=advertisements` を使います。
+
+登録後は data receiver app の ID/API key で MQTT broker に接続し、登録 topic
+を subscribe します。`CONNACK` と `SUBACK` が成功しても Data App Topics 登録が
+ない場合は publish が届かないため、`registerDataApp` の成功と UI の Data App
+Topics を確認します。
+
+collector は 1 分 window ごとに値を蓄積し、`sensor_minute` へ中央値を書き込み
+ます。HibouCO2/Env 系の FE6A service data は既存の direct BLE scan 実装と同じ
+marker 解釈を使います。
+
+```text
+03 05 17 + float32 LE  -> pressure_hpa
+03 13 + int16 LE / 256 -> temperature_c
+02 12 + uint8          -> humidity_percent
+03 20 + uint16 LE      -> lux
+04 1f 08 + uint16 LE   -> co2_ppm
+04 1f 07 + uint16 LE   -> etvoc
+02 80 02 ...           -> battery_percent
+```
+
+Compose では `cisco-iot` profile を使います。試験期間中は `cisco-spaces` profile
+と同時に起動できますが、同じ BLE sensor の 1 分値に両方の collector が upsert
+する点には注意してください。
+
 ## DB Check
 
 DB に入った最新値を簡単に確認します。

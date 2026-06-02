@@ -11,6 +11,7 @@ BINS := \
 	hm-api-server \
 	hm-db-maint \
 	hm-cisco-spaces-collector \
+	hm-cisco-iot-orchestrator-collector \
 	hm-cisco-spaces-export-raw \
 	hm-nature-remo-collector \
 	hm-echonet-collector \
