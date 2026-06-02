@@ -28,6 +28,16 @@ docs/openapi.yaml                      OpenAPI summary
 web/                                   metrics and admin pages
 ```
 
+`cmd/hm-api-server/` is split by responsibility:
+
+- `main.go`: process startup, database connection, graceful shutdown.
+- `server.go`: routing, web file serving, auth, CORS, and JSON helpers.
+- `sensors.go`: sensor device, latest value, and sensor series endpoints.
+- `energy.go`: energy latest and series endpoints.
+- `admin_status.go`: collector/admin status endpoints.
+- `admin_types.go`: admin response types and small PostgreSQL helpers.
+- `config.go`: environment parsing helpers.
+
 ## Data Model
 
 Main tables:
@@ -129,6 +139,10 @@ The admin UI shows:
 - schema migration status from `/api/admin/schema`
 
 The admin UI does not expose alarm, webhook, APNs, or maintenance controls.
+
+This is intentional: collector visibility is provided through
+`collector_status`. Automated alarm evaluation, webhook delivery, APNs delivery,
+and user notification history were removed to keep operations simple.
 
 ## API
 

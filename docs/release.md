@@ -80,3 +80,11 @@ The API contract format is not finalized yet. The target direction is:
 
 Generated Swift client code is not used for now. Revisit generation after the API surface
 grows enough that the handwritten client becomes costly to maintain.
+
+## Current Operational Scope
+
+The current server scope is sensor readings, energy readings, and collector
+status. Alarm rules, APNs push notifications, admin webhook delivery, and
+maintenance mode were removed. Migration `0008_drop_alarm_features.sql` drops
+the old alarm/APNs/webhook tables and device maintenance columns, so deployments
+that have not yet applied it should treat it as a deliberate schema cleanup.

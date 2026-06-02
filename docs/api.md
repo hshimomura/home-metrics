@@ -4,6 +4,14 @@
 Alarm rules, APNs, notification history, admin webhook delivery, and maintenance
 mode APIs are not implemented.
 
+Source layout:
+
+- `server.go`: route registration, auth/CORS, web file serving, JSON helpers.
+- `sensors.go`: `/api/devices` endpoints.
+- `energy.go`: `/api/energy` endpoints.
+- `admin_status.go`: `/api/health/details` and `/api/admin/*` status
+  endpoints.
+
 All `/api/*` endpoints except `/api/health` require bearer token or
 `X-API-Token` when `API_REQUIRE_TOKEN=true` or `API_TOKEN` is configured.
 
@@ -89,3 +97,16 @@ Returns Cisco Spaces firehose advisory-lock status and collector status for
 ### GET /api/admin/schema
 
 Returns applied DB migrations.
+
+## Removed APIs
+
+The following older API families are intentionally unsupported:
+
+- `/api/alert-rules`
+- `/api/notification-events`
+- `/api/ios/devices`
+- `/api/admin/health-alerts`
+- `/api/admin/health-notification-events`
+- `/api/admin/devices/{mac}/maintenance`
+
+They return the generic unsupported endpoint response when requested.
