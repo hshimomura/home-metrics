@@ -268,18 +268,16 @@ func registerDataApp(ctx context.Context, cfg config) error {
 }
 
 func loadConfig() config {
-	legacyAppID := envString("CISCO_IOT_ORCH_APP_ID", "")
-	legacyAPIKey := envString("CISCO_IOT_ORCH_API_KEY", "")
 	return config{
 		DBDSN:             envString("BLE_DB_DSN", defaultDBDSN),
 		APIURL:            envString("CISCO_IOT_ORCH_API_URL", defaultAPIURL),
 		MQTTAddr:          envString("CISCO_IOT_ORCH_MQTT_ADDR", defaultMQTTAddr),
-		OnboardAppID:      envString("CISCO_IOT_ORCH_ONBOARD_APP_ID", envString("CISCO_IOT_ORCH_ONBOARDING_APP_ID", defaultOnboardAppID)),
-		OnboardAPIKey:     envString("CISCO_IOT_ORCH_ONBOARD_API_KEY", envString("CISCO_IOT_ORCH_ONBOARDING_API_KEY", "")),
-		ControlAppID:      envString("CISCO_IOT_ORCH_CONTROL_APP_ID", envStringDefault(legacyAppID, defaultControlAppID)),
-		ControlAPIKey:     envString("CISCO_IOT_ORCH_CONTROL_API_KEY", legacyAPIKey),
-		DataAppID:         envString("CISCO_IOT_ORCH_DATA_APP_ID", envString("CISCO_IOT_ORCH_DATA_RECEIVER_APP_ID", envStringDefault(legacyAppID, defaultDataAppID))),
-		DataAPIKey:        envString("CISCO_IOT_ORCH_DATA_API_KEY", envString("CISCO_IOT_ORCH_DATA_RECEIVER_API_KEY", legacyAPIKey)),
+		OnboardAppID:      envString("CISCO_IOT_ORCH_ONBOARD_APP_ID", defaultOnboardAppID),
+		OnboardAPIKey:     envString("CISCO_IOT_ORCH_ONBOARD_API_KEY", ""),
+		ControlAppID:      envString("CISCO_IOT_ORCH_CONTROL_APP_ID", defaultControlAppID),
+		ControlAPIKey:     envString("CISCO_IOT_ORCH_CONTROL_API_KEY", ""),
+		DataAppID:         envString("CISCO_IOT_ORCH_DATA_APP_ID", defaultDataAppID),
+		DataAPIKey:        envString("CISCO_IOT_ORCH_DATA_API_KEY", ""),
 		Topic:             envString("CISCO_IOT_ORCH_TOPIC", defaultTopic),
 		SensorsFile:       envString("BLE_SENSORS_FILE", defaultSensorsFile),
 		RegisterDataApp:   envBool("CISCO_IOT_ORCH_REGISTER_DATA_APP", false),
@@ -289,13 +287,6 @@ func loadConfig() config {
 		ReconnectMaxDelay: envDuration("CISCO_IOT_ORCH_RECONNECT_MAX_DELAY", defaultReconnectMaxDelay),
 		StreamHeartbeat:   envDuration("CISCO_IOT_ORCH_STREAM_HEARTBEAT", defaultStreamHeartbeat),
 	}
-}
-
-func envStringDefault(value, fallback string) string {
-	if strings.TrimSpace(value) == "" {
-		return fallback
-	}
-	return value
 }
 
 func loadTargets(path string) (map[string]targetDevice, error) {
