@@ -80,7 +80,7 @@
     <section>
       <h2>Collector Status</h2>
       <table>
-        <thead><tr><th>Collector</th><th>Target</th><th>Expected</th><th>Last Attempt</th><th>Last Success</th><th>Last Data</th><th>First Failure</th><th>Last Failure</th><th>Failures</th><th>Last Error</th></tr></thead>
+        <thead><tr><th>Collector</th><th>Target</th><th>Last Attempt</th><th>Last Success</th><th>Last Data</th><th>First Failure</th><th>Last Failure</th><th>Failures</th><th>Last Error</th></tr></thead>
         <tbody id="collectors"></tbody>
       </table>
     </section>
@@ -195,7 +195,6 @@
         <tr>
           <td><code>${escapeHTML(item.collector_name)}</code></td>
           <td class="mono-wrap"><code>${escapeHTML(item.target_type)} / ${escapeHTML(item.target_key)}</code></td>
-          <td>${item.expected ? pill('ok') : pill('disabled')}</td>
           <td>${time(item.last_attempt_at)}<div class="muted">${age(item.last_attempt_at)}</div></td>
           <td>${time(item.last_success_at)}<div class="muted">${age(item.last_success_at)}</div></td>
           <td>${time(item.last_data_at)}<div class="muted">${age(item.last_data_at)}</div></td>
@@ -204,7 +203,7 @@
           <td>${item.consecutive_failures}</td>
           <td class="mono-wrap">${escapeHTML(cell(item.last_error))}</td>
         </tr>
-      `).join('') || '<tr><td colspan="10" class="muted">No collector status rows.</td></tr>';
+      `).join('') || '<tr><td colspan="9" class="muted">No collector status rows.</td></tr>';
     }
 
     async function load() {

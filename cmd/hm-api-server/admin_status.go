@@ -218,7 +218,9 @@ func (api *apiServer) handleCollectorStatus(w http.ResponseWriter, r *http.Reque
 		item.LastDataAt = timePtrFromPg(lastDataAt)
 		item.FirstFailureAt = timePtrFromPg(firstFailureAt)
 		item.LastFailureAt = timePtrFromPg(lastFailureAt)
-		item.Expected = collectorExpected(item.CollectorName, item.TargetType, item.TargetKey)
+		if !collectorExpected(item.CollectorName, item.TargetType, item.TargetKey) {
+			continue
+		}
 		items = append(items, item)
 	}
 	if err := rows.Err(); err != nil {

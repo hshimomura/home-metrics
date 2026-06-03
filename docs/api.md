@@ -89,9 +89,10 @@ Optional query parameter:
 
 ### GET /api/admin/collector-status
 
-Returns rows from `collector_status`. Each row includes `expected`; optional
-collectors that are intentionally disabled remain visible but are not counted as
-summary alerts.
+Returns expected rows from `collector_status`. Optional collectors that are
+intentionally disabled, such as `hm-cisco-spaces-collector` when
+`CISCO_SPACES_COLLECTOR_ENABLED=false`, are omitted from this response in the
+same way disabled collector profiles do not appear in the admin collector list.
 
 ### GET /api/admin/cisco-spaces-firehose
 
