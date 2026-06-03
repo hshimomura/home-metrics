@@ -54,8 +54,9 @@ Main tables:
 
 Migration `0008_drop_alarm_features.sql` removes the previous alarm/APNs/webhook
 tables and the old device maintenance columns from existing databases.
-Migration `` updates existing
-user-facing Cisco Sensor Connect device type labels.
+Migrations `` and
+`` update existing user-facing
+Cisco Sensor Connect device type labels.
 
 ## Configuration
 
