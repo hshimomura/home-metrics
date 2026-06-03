@@ -2,8 +2,10 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"encoding/hex"
+	"errors"
 	"testing"
 	"time"
 )
@@ -63,6 +65,58 @@ func TestDecodeBLEPayloadExtractsAdvertisementServiceData(t *testing.T) {
 	}
 }
 
+func TestDecodeMinewS1ScanOnlyAdvertisementSample(t *testing.T) {
+	ts := time.Date(2026, 6, 2, 15, 14, 16, 0, time.UTC)
+	adv := mustHex(t, "0201061b166afe03050610ff2098041103ffff041600ffff03133a1a02123b")
+	payload := protoMessage(1, protoFields(
+		protoField(1, 2, protoString("d96231e7-13b4-4ccd-bafa-ec5c60b95c88")),
+		protoField(2, 2, protoBytes(adv)),
+		protoMessage(3, protoField(
+			1, 0, protoVarint(uint64(ts.Unix())),
+		)),
+		protoField(4, 2, protoString("84:5a:3e:d6:b7:80")),
+		protoMessage(12, protoFields(
+			protoField(1, 2, protoString("00:FA:B6:07:DE:4B")),
+			protoField(2, 0, protoVarint(uint64(uint32(0xffffffbc)))),
+		)),
+	))
+	const samplePayloadHex = "0a7d0a2464393632333165372d313362342d346363642d626166612d656335633630623935633838121f0201061b166afe03050610ff2098041103ffff041600ffff03133a1a02123b1a0608c8e6fbd006221138343a35613a33653a64363a62373a383062190a1130303a46413a42363a30373a44453a344210bcffffff0f"
+	if hex.EncodeToString(payload) != samplePayloadHex {
+		t.Fatalf("payload hex=%s, want %s", hex.EncodeToString(payload), samplePayloadHex)
+	}
+
+	readings, err := decodeDataBatch(payload, map[string]targetDevice{
+		"00:fa:b6:07:de:4b": {MAC: "00:fa:b6:07:de:4b", Label: "Living"},
+	})
+	if err != nil {
+		t.Fatalf("decodeDataBatch: %v", err)
+	}
+	if len(readings) != 1 {
+		t.Fatalf("readings=%d, want 1", len(readings))
+	}
+	got := readings[0]
+	if got.SensorMAC != "00:fa:b6:07:de:4b" || got.Label != "Living" {
+		t.Fatalf("target = %s %s", got.SensorMAC, got.Label)
+	}
+	if got.TemperatureC == nil || *got.TemperatureC != 26.23 {
+		t.Fatalf("temperature=%v, want 26.23", got.TemperatureC)
+	}
+	if got.HumidityPercent == nil || *got.HumidityPercent != 59 {
+		t.Fatalf("humidity=%v, want 59", got.HumidityPercent)
+	}
+	if got.BatteryPercent != nil {
+		t.Fatalf("battery=%v, want nil", got.BatteryPercent)
+	}
+	if got.RSSI == nil || *got.RSSI != -68 {
+		t.Fatalf("rssi=%v, want -68", got.RSSI)
+	}
+
+	battery := decodeBLEPayload(mustHex(t, "02010611166afe02800206530432355a6930303032"))
+	if battery.BatteryPercent == nil || *battery.BatteryPercent != 83 {
+		t.Fatalf("battery=%v, want 83", battery.BatteryPercent)
+	}
+}
+
 func TestDecodeBLEPayloadExtractsEnvServiceData(t *testing.T) {
 	adv := mustHex(t, "0201061b166afe0305177bd47b44041f071a0403ff00000313991303200a00")
 	got := decodeBLEPayload(adv)
@@ -83,6 +137,74 @@ func TestDecodeBLEPayloadExtractsEnvServiceData(t *testing.T) {
 	got = decodeBLEPayload(adv)
 	if got.ETVOC == nil || *got.ETVOC != 7 {
 		t.Fatalf("etvoc=%v, want 7", got.ETVOC)
+	}
+}
+
+func TestDecodeBLEPayloadIgnoresMarkersOutsideServiceData(t *testing.T) {
+	adv := mustHex(t, "0201060313000011166afe02800206530432355a6930303032")
+	got := decodeBLEPayload(adv)
+	if got.TemperatureC != nil {
+		t.Fatalf("temperature=%v, want nil", *got.TemperatureC)
+	}
+	if got.BatteryPercent == nil || *got.BatteryPercent != 83 {
+		t.Fatalf("battery=%v, want 83", got.BatteryPercent)
+	}
+}
+
+func TestCollectorFlushCompletedDeletesStoredWindow(t *testing.T) {
+	window := time.Date(2026, 6, 3, 12, 34, 0, 0, time.UTC)
+	c := &collector{windows: map[string]*aggregate{}}
+	c.add(bleReading{
+		TS:           window.Add(10 * time.Second),
+		SensorMAC:    "00:fa:b6:07:de:4b",
+		Label:        "Living",
+		TemperatureC: floatPtr(26.5),
+	})
+	c.flushFn = func(ctx context.Context, agg *aggregate) (bool, error) {
+		if agg.SensorMAC != "00:fa:b6:07:de:4b" || !agg.Window.Equal(window) {
+			t.Fatalf("flush aggregate = %s %s", agg.SensorMAC, agg.Window)
+		}
+		return true, nil
+	}
+
+	flushed, err := c.flushCompleted(context.Background(), window.Add(time.Minute))
+	if err != nil {
+		t.Fatalf("flushCompleted: %v", err)
+	}
+	if flushed != 1 {
+		t.Fatalf("flushed=%d, want 1", flushed)
+	}
+	if len(c.windows) != 0 {
+		t.Fatalf("pending windows=%d, want 0", len(c.windows))
+	}
+}
+
+func TestCollectorFlushCompletedKeepsWindowOnFailure(t *testing.T) {
+	window := time.Date(2026, 6, 3, 12, 34, 0, 0, time.UTC)
+	c := &collector{windows: map[string]*aggregate{}}
+	c.add(bleReading{
+		TS:           window.Add(10 * time.Second),
+		SensorMAC:    "00:fa:b6:07:de:4b",
+		Label:        "Living",
+		TemperatureC: floatPtr(26.5),
+	})
+	c.flushFn = func(ctx context.Context, agg *aggregate) (bool, error) {
+		return false, errors.New("database unavailable")
+	}
+
+	flushed, err := c.flushCompleted(context.Background(), window.Add(time.Minute))
+	if err == nil {
+		t.Fatal("flushCompleted error = nil, want error")
+	}
+	if flushed != 0 {
+		t.Fatalf("flushed=%d, want 0", flushed)
+	}
+	if len(c.windows) != 1 {
+		t.Fatalf("pending windows=%d, want 1", len(c.windows))
+	}
+	count, oldest := c.pendingSummary(window.Add(3 * time.Minute))
+	if count != 1 || oldest != 3*time.Minute {
+		t.Fatalf("pendingSummary=(%d,%s), want (1,3m0s)", count, oldest)
 	}
 }
 

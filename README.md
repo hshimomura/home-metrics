@@ -2,8 +2,8 @@
 
 Home Metrics stores BLE environmental sensor data, energy readings, and
 collector runtime status in PostgreSQL/TimescaleDB. The web UI shows current and
-historical measurements. The admin UI is intentionally limited to collector
-status.
+historical measurements. The admin UI is intentionally limited to collector and
+operational status.
 
 Alarm rules, APNs push notifications, notification history, admin webhook
 delivery, and sensor maintenance mode are not part of the current implementation.
@@ -15,7 +15,7 @@ cmd/hm-api-server/                     REST API and web UI
 cmd/hm-ble-collector/                  local BLE scanner collector
 cmd/hm-cisco-spaces-collector/         Cisco Spaces firehose collector
 cmd/hm-cisco-iot-orchestrator-collector/
-                                       Cisco IoT Orchestrator MQTT collector
+                                       Cisco Sensor Connect (IoT Orchestrator) MQTT collector
 cmd/hm-db-migrate/                     schema migration CLI
 cmd/hm-db-maint/                       rollup refresh and retention CLI
 cmd/hm-nature-remo-collector/          Nature Remo energy collector
@@ -54,11 +54,18 @@ Main tables:
 
 Migration `0008_drop_alarm_features.sql` removes the previous alarm/APNs/webhook
 tables and the old device maintenance columns from existing databases.
+Migration `` updates existing
+user-facing Cisco Sensor Connect device type labels.
 
 ## Configuration
 
 Use `examples/home-metrics.env.example` or
 `examples/home-metrics.compose.env.example` as the starting point.
+
+For direct, non-Docker collector runs, set `SENSOR_INGEST_SOURCE` for the
+collector command you are starting. For Docker Compose, collector-specific
+profile variables such as `CISCO_IOT_ORCH_INGEST_SOURCE` are mapped to
+`SENSOR_INGEST_SOURCE` inside the service definition.
 
 Common API settings:
 
@@ -87,17 +94,22 @@ Enable Cisco Spaces firehose collection:
 docker compose --profile cisco-spaces up -d hm-cisco-spaces-collector
 ```
 
-Enable Cisco IoT Orchestrator collection:
+Enable Cisco Sensor Connect (IoT Orchestrator) collection:
 
 ```sh
 docker compose --profile cisco-iot up -d hm-cisco-iot-orchestrator-collector
 ```
 
-## Cisco IoT Orchestrator
+## Cisco Sensor Connect (IoT Orchestrator)
 
-The IoT Orchestrator collector receives BLE advertisements from the MQTT broker
-and exports decoded temperature, humidity, battery, RSSI, lux, CO2, pressure,
-and eTVOC values to `sensor_minute`.
+The `hm-cisco-iot-orchestrator-collector` command receives BLE advertisements
+from the IoT Orchestrator MQTT broker and exports decoded temperature, humidity,
+battery, RSSI, lux, CO2, pressure, and eTVOC values to `sensor_minute`.
+
+The internal collector, profile, and environment variable names intentionally
+keep `cisco_iot_orchestrator` / `CISCO_IOT_ORCH_*` because they identify the
+IoT Orchestrator endpoint. User-facing device labels use
+`Cisco Sensor Connect (IoT Orchestrator)`.
 
 Required application IDs and API keys:
 
@@ -124,7 +136,13 @@ Important setup sequence:
    plus `sensor_minute`.
 
 The implementation treats advertisement telemetry as the source of truth. It
-does not store raw telemetry payloads.
+does not store raw MQTT/protobuf telemetry payloads. The collector decodes each
+MQTT message in memory, keeps only minute-level aggregate windows, writes the
+median values to `sensor_minute`, and drops successfully flushed windows.
+`CISCO_IOT_ORCH_AGGREGATE_FLUSH_INTERVAL` controls periodic aggregate flushes
+so the last minute is written even if no later MQTT message arrives. If database
+writes fail, pending aggregate windows are retained and summarized in logs at
+`CISCO_IOT_ORCH_PENDING_LOG_INTERVAL`.
 
 ## Web UI
 

@@ -1,6 +1,7 @@
 # Home Metrics API
 
-`hm-api-server` serves read-only sensor, energy, and collector status APIs.
+`hm-api-server` serves read-only sensor, energy, collector status, and
+operational status APIs.
 Alarm rules, APNs, notification history, admin webhook delivery, and maintenance
 mode APIs are not implemented.
 
@@ -18,7 +19,7 @@ All `/api/*` endpoints except `/api/health` require bearer token or
 ## Web UI
 
 - `GET /` returns the metrics UI.
-- `GET /admin` returns the admin UI. The admin UI shows collector status only:
+- `GET /admin` returns the admin UI. The admin UI shows operational status:
   overall collector summary, Cisco Spaces firehose lock/status, collector status
   rows, and schema migration status.
 

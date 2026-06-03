@@ -132,6 +132,8 @@ services:
       CISCO_IOT_ORCH_DRY_RUN: ${CISCO_IOT_ORCH_DRY_RUN:-false}
       CISCO_IOT_ORCH_DEBUG: ${CISCO_IOT_ORCH_DEBUG:-false}
       CISCO_IOT_ORCH_STREAM_HEARTBEAT: ${CISCO_IOT_ORCH_STREAM_HEARTBEAT:-60s}
+      CISCO_IOT_ORCH_AGGREGATE_FLUSH_INTERVAL: ${CISCO_IOT_ORCH_AGGREGATE_FLUSH_INTERVAL:-10s}
+      CISCO_IOT_ORCH_PENDING_LOG_INTERVAL: ${CISCO_IOT_ORCH_PENDING_LOG_INTERVAL:-5m}
     volumes:
       - ${SENSORS_FILE:-./examples/sensors.json.example}:/etc/home-metrics/sensors.json:ro
     command: ["hm-cisco-iot-orchestrator-collector"]

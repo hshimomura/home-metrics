@@ -36,9 +36,9 @@ jobs:
             type=ref,event=tag
             type=sha,prefix=sha-
           labels: |
-            org.opencontainers.image.description=Home sensor, energy, UPS, Cisco Spaces, and Cisco IoT Orchestrator metrics collector with TimescaleDB, API, and web UI.
+            org.opencontainers.image.description=Home sensor, energy, UPS, Cisco Spaces, and Cisco Sensor Connect (IoT Orchestrator) metrics collector with TimescaleDB, API, and web UI.
           annotations: |
-            org.opencontainers.image.description=Home sensor, energy, UPS, Cisco Spaces, and Cisco IoT Orchestrator metrics collector with TimescaleDB, API, and web UI.
+            org.opencontainers.image.description=Home sensor, energy, UPS, Cisco Spaces, and Cisco Sensor Connect (IoT Orchestrator) metrics collector with TimescaleDB, API, and web UI.
       - id: build
         uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f
         with:

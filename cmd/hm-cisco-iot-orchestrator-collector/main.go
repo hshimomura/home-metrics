@@ -37,9 +37,12 @@ const (
 	defaultControlAppID      = "control"
 	defaultDataAppID         = "data"
 	defaultTopic             = "ioslab/home-metrics/ble/advertisements/v1"
+	sensorConnectSensorCategory  = "Cisco Sensor Connect (IoT Orchestrator)"
 	defaultReconnectMinDelay = time.Second
 	defaultReconnectMaxDelay = time.Minute
 	defaultStreamHeartbeat   = time.Minute
+	defaultAggregateFlush    = 10 * time.Second
+	defaultPendingLog        = 5 * time.Minute
 )
 
 type config struct {
@@ -60,6 +63,8 @@ type config struct {
 	ReconnectMinDelay time.Duration
 	ReconnectMaxDelay time.Duration
 	StreamHeartbeat   time.Duration
+	AggregateFlush    time.Duration
+	PendingLog        time.Duration
 }
 
 type targetDevice struct {
@@ -106,6 +111,7 @@ type aggregate struct {
 type collector struct {
 	db      *pgx.Conn
 	windows map[string]*aggregate
+	flushFn func(context.Context, *aggregate) (bool, error)
 }
 
 type statusReporter struct {
@@ -130,7 +136,7 @@ func main() {
 
 	cfg := loadConfig()
 	if source := strings.ToLower(envString("SENSOR_INGEST_SOURCE", "cisco_iot_orchestrator")); source != "cisco_iot_orchestrator" && source != "cisco-iot-orchestrator" && source != "cisco_iot" && source != "cisco-iot" {
-		log.Printf("Cisco IoT Orchestrator collector disabled by SENSOR_INGEST_SOURCE=%s", source)
+		log.Printf("Cisco Sensor Connect (IoT Orchestrator) collector disabled by SENSOR_INGEST_SOURCE=%s", source)
 		return
 	}
 	if cfg.DataAPIKey == "" {
@@ -170,7 +176,7 @@ func main() {
 		}
 	}
 
-	log.Printf("Cisco IoT Orchestrator collector started mqtt=%s topic=%s data_app=%s control_app=%s dry_run=%t", cfg.MQTTAddr, cfg.Topic, cfg.DataAppID, cfg.ControlAppID, cfg.DryRun)
+	log.Printf("Cisco Sensor Connect (IoT Orchestrator) collector started mqtt=%s topic=%s data_app=%s control_app=%s dry_run=%t", cfg.MQTTAddr, cfg.Topic, cfg.DataAppID, cfg.ControlAppID, cfg.DryRun)
 	runWithReconnect(ctx, cfg, targets, c, reporter)
 	if err := c.flushAll(context.Background()); err != nil {
 		log.Printf("flush on shutdown: %v", err)
@@ -179,6 +185,7 @@ func main() {
 
 func runWithReconnect(ctx context.Context, cfg config, targets map[string]targetDevice, c *collector, reporter *statusReporter) {
 	delay := cfg.ReconnectMinDelay
+	lastPendingLog := time.Time{}
 	for ctx.Err() == nil {
 		err := runMQTT(ctx, cfg, func(topic string, payload []byte) {
 			if cfg.Debug {
@@ -190,27 +197,21 @@ func runWithReconnect(ctx context.Context, cfg config, targets map[string]target
 				reporter.MarkFailure(ctx, err)
 				return
 			}
-			if len(readings) == 0 {
-				reporter.MarkSuccess(ctx)
-				return
-			}
 			for _, reading := range readings {
 				c.add(reading)
 			}
-			flushed, err := c.flushCompleted(ctx, time.Now().Truncate(time.Minute))
-			if err != nil {
-				log.Printf("flush Cisco IoT readings: %v", err)
-				reporter.MarkFailure(ctx, err)
-				return
-			}
-			if flushed > 0 {
-				reporter.MarkDataSuccess(ctx)
-			} else {
-				reporter.MarkSuccess(ctx)
-			}
+			lastPendingLog = flushPending(ctx, c, reporter, "message", cfg.PendingLog, lastPendingLog)
+		}, func() {
+			lastPendingLog = flushPending(ctx, c, reporter, "ticker", cfg.PendingLog, lastPendingLog)
 		})
 		if ctx.Err() != nil {
 			return
+		}
+		if err != nil {
+			count, oldest := c.pendingSummary(time.Now())
+			if count > 0 {
+				log.Printf("Cisco Sensor Connect aggregate pending after MQTT stream end windows=%d oldest_age=%s", count, oldest.Round(time.Second))
+			}
 		}
 		log.Printf("MQTT stream ended: %v; reconnecting in %s", err, delay)
 		reporter.MarkFailure(ctx, err)
@@ -224,6 +225,35 @@ func runWithReconnect(ctx context.Context, cfg config, targets map[string]target
 			delay = cfg.ReconnectMaxDelay
 		}
 	}
+}
+
+func flushPending(ctx context.Context, c *collector, reporter *statusReporter, reason string, logEvery time.Duration, lastLog time.Time) time.Time {
+	now := time.Now()
+	flushed, err := c.flushCompleted(ctx, now.Truncate(time.Minute))
+	if err != nil {
+		count, oldest := c.pendingSummary(now)
+		log.Printf("flush Cisco Sensor Connect readings reason=%s pending_windows=%d oldest_age=%s: %v", reason, count, oldest.Round(time.Second), err)
+		reporter.MarkFailure(ctx, err)
+		return maybeLogPending(c, now, logEvery, lastLog)
+	}
+	if flushed > 0 {
+		reporter.MarkDataSuccess(ctx)
+	} else {
+		reporter.MarkSuccess(ctx)
+	}
+	return maybeLogPending(c, now, logEvery, lastLog)
+}
+
+func maybeLogPending(c *collector, now time.Time, logEvery time.Duration, lastLog time.Time) time.Time {
+	if logEvery <= 0 || (!lastLog.IsZero() && now.Sub(lastLog) < logEvery) {
+		return lastLog
+	}
+	count, oldest := c.pendingSummary(now)
+	if count == 0 || oldest < time.Minute {
+		return lastLog
+	}
+	log.Printf("Cisco Sensor Connect aggregate pending windows=%d oldest_age=%s", count, oldest.Round(time.Second))
+	return now
 }
 
 func registerDataApp(ctx context.Context, cfg config) error {
@@ -263,7 +293,7 @@ func registerDataApp(ctx context.Context, cfg config) error {
 		}
 		return fmt.Errorf("register data app failed: %s", result.Reason)
 	}
-	log.Printf("registered Cisco IoT data app app=%s control_app=%s topic=%s", cfg.DataAppID, cfg.ControlAppID, cfg.Topic)
+	log.Printf("registered Cisco Sensor Connect data app app=%s control_app=%s topic=%s", cfg.DataAppID, cfg.ControlAppID, cfg.Topic)
 	return nil
 }
 
@@ -286,6 +316,8 @@ func loadConfig() config {
 		ReconnectMinDelay: envDuration("CISCO_IOT_ORCH_RECONNECT_MIN_DELAY", defaultReconnectMinDelay),
 		ReconnectMaxDelay: envDuration("CISCO_IOT_ORCH_RECONNECT_MAX_DELAY", defaultReconnectMaxDelay),
 		StreamHeartbeat:   envDuration("CISCO_IOT_ORCH_STREAM_HEARTBEAT", defaultStreamHeartbeat),
+		AggregateFlush:    envDuration("CISCO_IOT_ORCH_AGGREGATE_FLUSH_INTERVAL", defaultAggregateFlush),
+		PendingLog:        envDuration("CISCO_IOT_ORCH_PENDING_LOG_INTERVAL", defaultPendingLog),
 	}
 }
 
@@ -564,7 +596,7 @@ func skipProtoValue(wire uint64, data []byte) ([]byte, error) {
 	}
 }
 
-func runMQTT(ctx context.Context, cfg config, onMessage func(topic string, payload []byte)) error {
+func runMQTT(ctx context.Context, cfg config, onMessage func(topic string, payload []byte), onFlushTick func()) error {
 	conn, err := net.DialTimeout("tcp", cfg.MQTTAddr, 10*time.Second)
 	if err != nil {
 		return err
@@ -579,6 +611,13 @@ func runMQTT(ctx context.Context, cfg config, onMessage func(topic string, paylo
 	}
 	heartbeat := time.NewTicker(cfg.StreamHeartbeat)
 	defer heartbeat.Stop()
+	var flushTick <-chan time.Time
+	var flushTicker *time.Ticker
+	if cfg.AggregateFlush > 0 {
+		flushTicker = time.NewTicker(cfg.AggregateFlush)
+		flushTick = flushTicker.C
+		defer flushTicker.Stop()
+	}
 	for {
 		select {
 		case <-ctx.Done():
@@ -586,6 +625,10 @@ func runMQTT(ctx context.Context, cfg config, onMessage func(topic string, paylo
 		case <-heartbeat.C:
 			if err := writeMQTTPacket(conn, 0xc0, nil); err != nil {
 				return err
+			}
+		case <-flushTick:
+			if onFlushTick != nil {
+				onFlushTick()
 			}
 		default:
 		}
@@ -734,8 +777,12 @@ func randomHex(bytesLen int) string {
 }
 
 func decodeBLEPayload(data []byte) bleReading {
-	reading := decodeServiceData(hex.EncodeToString(data))
-	for _, serviceData := range serviceDataFromAdvertisement(data) {
+	serviceDataList := serviceDataFromAdvertisement(data)
+	if len(serviceDataList) == 0 {
+		return decodeServiceData(hex.EncodeToString(data))
+	}
+	reading := bleReading{}
+	for _, serviceData := range serviceDataList {
 		reading.merge(decodeServiceData(hex.EncodeToString(serviceData)))
 	}
 	return reading
@@ -895,7 +942,7 @@ func (c *collector) flushCompleted(ctx context.Context, currentWindow time.Time)
 	flushed := 0
 	for key, agg := range c.windows {
 		if agg.Window.Before(currentWindow) {
-			wrote, err := c.flush(ctx, agg)
+			wrote, err := c.flushAggregate(ctx, agg)
 			if err != nil {
 				errs = append(errs, err)
 				continue
@@ -912,13 +959,37 @@ func (c *collector) flushCompleted(ctx context.Context, currentWindow time.Time)
 func (c *collector) flushAll(ctx context.Context) error {
 	var errs []error
 	for key, agg := range c.windows {
-		if _, err := c.flush(ctx, agg); err != nil {
+		if _, err := c.flushAggregate(ctx, agg); err != nil {
 			errs = append(errs, err)
 			continue
 		}
 		delete(c.windows, key)
 	}
 	return errors.Join(errs...)
+}
+
+func (c *collector) flushAggregate(ctx context.Context, agg *aggregate) (bool, error) {
+	if c.flushFn != nil {
+		return c.flushFn(ctx, agg)
+	}
+	return c.flush(ctx, agg)
+}
+
+func (c *collector) pendingSummary(now time.Time) (int, time.Duration) {
+	count := len(c.windows)
+	if count == 0 {
+		return 0, 0
+	}
+	var oldest time.Time
+	for _, agg := range c.windows {
+		if oldest.IsZero() || agg.Window.Before(oldest) {
+			oldest = agg.Window
+		}
+	}
+	if oldest.IsZero() || now.Before(oldest) {
+		return count, 0
+	}
+	return count, now.Sub(oldest)
 }
 
 func (c *collector) flush(ctx context.Context, agg *aggregate) (bool, error) {
@@ -957,7 +1028,7 @@ func (c *collector) flush(ctx context.Context, agg *aggregate) (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("insert %s %s: %w", agg.SensorMAC, agg.Window.Format(time.RFC3339), err)
 	}
-	log.Printf("flushed Cisco IoT sensor=%s minute=%s", agg.SensorMAC, agg.Window.Format(time.RFC3339))
+	log.Printf("flushed Cisco Sensor Connect sensor=%s minute=%s", agg.SensorMAC, agg.Window.Format(time.RFC3339))
 	return true, nil
 }
 
@@ -980,10 +1051,14 @@ func upsertDevice(ctx context.Context, db *pgx.Conn, mac string, label string) e
 		VALUES ($1, $2, $3, $4)
 		ON CONFLICT (mac) DO UPDATE SET
 			label = EXCLUDED.label,
-			sensor_category = COALESCE(devices.sensor_category, EXCLUDED.sensor_category),
+			sensor_category = CASE
+				WHEN devices.sensor_category IS NULL OR devices.sensor_category = '' OR devices.sensor_category = 'Cisco IoT Orchestrator'
+				THEN EXCLUDED.sensor_category
+				ELSE devices.sensor_category
+			END,
 			location = COALESCE(devices.location, EXCLUDED.location),
 			updated_at = now()
-	`, mac, label, "Cisco IoT Orchestrator", label)
+	`, mac, label, sensorConnectSensorCategory, label)
 	return err
 }
 
