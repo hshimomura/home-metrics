@@ -12,6 +12,7 @@ type collectorStatusResponse struct {
 	CollectorName       string     `json:"collector_name"`
 	TargetType          string     `json:"target_type"`
 	TargetKey           string     `json:"target_key"`
+	Expected            bool       `json:"expected"`
 	LastAttemptAt       *time.Time `json:"last_attempt_at,omitempty"`
 	LastSuccessAt       *time.Time `json:"last_success_at,omitempty"`
 	LastDataAt          *time.Time `json:"last_data_at,omitempty"`

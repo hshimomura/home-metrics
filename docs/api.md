@@ -34,7 +34,8 @@ Returns `{"status":"ok"}` when the database is reachable.
 Returns database status and collector status summary. `stale_collectors` is
 counted from `collector_status` when a row has no successful run, has
 consecutive failures, or has not updated within `COLLECTOR_STATUS_STALE_AFTER`
-(default `5m`).
+(default `5m`). The optional `hm-cisco-spaces-collector` row is excluded unless
+`CISCO_SPACES_COLLECTOR_ENABLED=true`.
 
 ```json
 {
@@ -88,12 +89,15 @@ Optional query parameter:
 
 ### GET /api/admin/collector-status
 
-Returns rows from `collector_status`.
+Returns rows from `collector_status`. Each row includes `expected`; optional
+collectors that are intentionally disabled remain visible but are not counted as
+summary alerts.
 
 ### GET /api/admin/cisco-spaces-firehose
 
 Returns Cisco Spaces firehose advisory-lock status and collector status for
-`hm-cisco-spaces-collector`.
+`hm-cisco-spaces-collector`. When `CISCO_SPACES_COLLECTOR_ENABLED=false`, the
+mode is `disabled`.
 
 ### GET /api/admin/schema
 

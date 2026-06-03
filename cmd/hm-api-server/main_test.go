@@ -78,6 +78,21 @@ func TestEnergyRangeIntervals(t *testing.T) {
 	}
 }
 
+func TestCollectorExpectedTreatsCiscoSpacesAsOptional(t *testing.T) {
+	t.Setenv("CISCO_SPACES_COLLECTOR_ENABLED", "")
+	if collectorExpected("hm-cisco-spaces-collector", "cisco_spaces_firehose", "default") {
+		t.Fatal("Cisco Spaces collector must be optional by default")
+	}
+	if !collectorExpected("hm-cisco-iot-orchestrator-collector", "mqtt", "192.168.67.6:41883/topic") {
+		t.Fatal("non-optional collectors must be expected")
+	}
+
+	t.Setenv("CISCO_SPACES_COLLECTOR_ENABLED", "true")
+	if !collectorExpected("hm-cisco-spaces-collector", "cisco_spaces_firehose", "default") {
+		t.Fatal("Cisco Spaces collector must be expected when enabled")
+	}
+}
+
 func TestEnergySeriesResponseIncludesUnit(t *testing.T) {
 	resp := energySeriesResponse{
 		Source:    "echonet",

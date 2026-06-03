@@ -81,9 +81,12 @@ CISCO_SPACES_COLLECTOR_ENABLED=false
 `COLLECTOR_STATUS_STALE_AFTER` controls `/api/health/details` and the admin UI
 summary. A collector is stale when it has never succeeded, has consecutive
 failures, or has not updated within this duration.
-`hm-cisco-spaces-collector` is excluded from this stale summary unless
-`CISCO_SPACES_COLLECTOR_ENABLED=true`, because the Cisco Spaces firehose
-collector is intentionally stopped in the normal Sensor Connect deployment.
+
+`hm-cisco-spaces-collector` is an optional profile. Keep
+`CISCO_SPACES_COLLECTOR_ENABLED=false` when it is intentionally stopped; the
+admin summary will show it as disabled instead of treating the stale
+`collector_status` row as an alert. Set it to `true` only when the Cisco Spaces
+firehose collector is expected to be running.
 
 ## Docker Compose
 

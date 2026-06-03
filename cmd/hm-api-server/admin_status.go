@@ -18,19 +18,27 @@ func (api *apiServer) handleHealthDetails(w http.ResponseWriter, r *http.Request
 	var res healthDetailsResponse
 	res.Status = "ok"
 	res.Database = "ok"
-	excludedCollector := ""
-	if !ciscoSpacesCollectorEnabled() {
-		excludedCollector = "hm-cisco-spaces-collector"
-	}
+	includeCiscoSpaces := ciscoSpacesCollectorEnabled()
 	err := api.db.QueryRow(r.Context(), `
 		SELECT
-			(SELECT count(*) FROM collector_status WHERE collector_name <> $2),
 			(SELECT count(*) FROM collector_status
-			 WHERE collector_name <> $2
+			 WHERE $2
+			    OR NOT (
+			      collector_name = 'hm-cisco-spaces-collector'
+			      AND target_type = 'cisco_spaces_firehose'
+			      AND target_key = 'default'
+			    )),
+			(SELECT count(*) FROM collector_status
+			 WHERE ($2
+			        OR NOT (
+			          collector_name = 'hm-cisco-spaces-collector'
+			          AND target_type = 'cisco_spaces_firehose'
+			          AND target_key = 'default'
+			        ))
 			   AND (last_success_at IS NULL
 			        OR consecutive_failures > 0
 			        OR updated_at < now() - $1::interval))
-	`, intervalSeconds(envDuration("COLLECTOR_STATUS_STALE_AFTER", 5*time.Minute)), excludedCollector).Scan(&res.CollectorTargets, &res.StaleCollectors)
+	`, intervalSeconds(envDuration("COLLECTOR_STATUS_STALE_AFTER", 5*time.Minute)), includeCiscoSpaces).Scan(&res.CollectorTargets, &res.StaleCollectors)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "query health details")
 		return
@@ -210,6 +218,7 @@ func (api *apiServer) handleCollectorStatus(w http.ResponseWriter, r *http.Reque
 		item.LastDataAt = timePtrFromPg(lastDataAt)
 		item.FirstFailureAt = timePtrFromPg(firstFailureAt)
 		item.LastFailureAt = timePtrFromPg(lastFailureAt)
+		item.Expected = collectorExpected(item.CollectorName, item.TargetType, item.TargetKey)
 		items = append(items, item)
 	}
 	if err := rows.Err(); err != nil {
@@ -221,4 +230,11 @@ func (api *apiServer) handleCollectorStatus(w http.ResponseWriter, r *http.Reque
 
 func intervalSeconds(duration time.Duration) string {
 	return fmt.Sprintf("%f seconds", duration.Seconds())
+}
+
+func collectorExpected(name string, targetType string, targetKey string) bool {
+	if name == "hm-cisco-spaces-collector" && targetType == "cisco_spaces_firehose" && targetKey == "default" {
+		return ciscoSpacesCollectorEnabled()
+	}
+	return true
 }
