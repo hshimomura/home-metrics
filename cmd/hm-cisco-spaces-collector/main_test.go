@@ -1,8 +1,6 @@
 package main
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -212,61 +210,6 @@ func TestProcessEventParsesReferenceShape(t *testing.T) {
 	assertPtr(t, "lux", got.Lux, 123)
 	assertPtr(t, "battery", got.BatteryPercent, 98)
 	assertPtr(t, "etvoc", got.ETVOC, 7)
-}
-
-func TestExtractRawEventMetadata(t *testing.T) {
-	const raw = `{
-		"recordUid": "event-123",
-		"eventType": "IOT_TELEMETRY",
-		"recordTimestamp": 1700000000000,
-		"iotTelemetry": {
-			"deviceInfo": {
-				"deviceId": "25Zj0003",
-				"deviceMacAddress": "00-FA-B6-07-DE-4C",
-				"label": "DC"
-			},
-			"detectedPosition": {
-				"mapId": "map-1",
-				"locationId": "location-from-position"
-			},
-			"location": {
-				"locationId": "location-1"
-			}
-		}
-	}`
-	var event firehoseEvent
-	if err := json.Unmarshal([]byte(raw), &event); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-	got := extractRawEventMetadata(event, []byte(raw))
-	if got.RecordUID != "event-123" {
-		t.Fatalf("record uid = %q", got.RecordUID)
-	}
-	if got.EventType != "IOT_TELEMETRY" {
-		t.Fatalf("event type = %q", got.EventType)
-	}
-	if got.DeviceMAC != "00:fa:b6:07:de:4c" {
-		t.Fatalf("device mac = %q", got.DeviceMAC)
-	}
-	if got.DeviceID != "25Zj0003" {
-		t.Fatalf("device id = %q", got.DeviceID)
-	}
-	if got.DeviceLabel != "DC" {
-		t.Fatalf("device label = %q", got.DeviceLabel)
-	}
-	if got.LocationID != "location-1" {
-		t.Fatalf("location id = %q", got.LocationID)
-	}
-	if got.MapID != "map-1" {
-		t.Fatalf("map id = %q", got.MapID)
-	}
-	if got.RecordTS == nil || !got.RecordTS.Equal(time.UnixMilli(1700000000000).UTC()) {
-		t.Fatalf("record ts = %v", got.RecordTS)
-	}
-	sum := sha256.Sum256([]byte(raw))
-	if got.PayloadSHA256 != hex.EncodeToString(sum[:]) {
-		t.Fatalf("payload sha256 = %q", got.PayloadSHA256)
-	}
 }
 
 func TestBatteryAllowlist(t *testing.T) {

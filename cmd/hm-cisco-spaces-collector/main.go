@@ -171,18 +171,6 @@ type statusReporter struct {
 	target collectorstatus.Target
 }
 
-type rawEventMetadata struct {
-	RecordUID     string
-	RecordTS      *time.Time
-	EventType     string
-	DeviceMAC     string
-	DeviceID      string
-	DeviceLabel   string
-	LocationID    string
-	MapID         string
-	PayloadSHA256 string
-}
-
 func (r *statusReporter) MarkSuccess(ctx context.Context) {
 	if r == nil || r.db == nil {
 		return
@@ -278,17 +266,6 @@ func main() {
 	}, func() {
 		reporter.MarkSuccess(ctx)
 	}, func(event firehoseEvent, raw []byte) {
-		if !cfg.DryRun {
-			dbMu.Lock()
-			err := insertCiscoSpacesRawEvent(ctx, db, event, raw)
-			dbMu.Unlock()
-			if err != nil {
-				log.Printf("store Cisco Spaces raw event: %v", err)
-				reporter.MarkFailure(ctx, err)
-				return
-			}
-		}
-
 		reading, ok, _, err := p.processEvent(event)
 		if err != nil {
 			log.Printf("process Cisco Spaces event: %v", err)

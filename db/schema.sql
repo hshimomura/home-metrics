@@ -112,34 +112,6 @@ CREATE TABLE IF NOT EXISTS collector_status (
     PRIMARY KEY (collector_name, target_type, target_key)
 );
 
-CREATE TABLE IF NOT EXISTS cisco_spaces_raw_events (
-    received_at timestamptz NOT NULL DEFAULT now(),
-    id bigserial NOT NULL,
-    record_uid text,
-    record_timestamp timestamptz,
-    event_type text,
-    device_mac text,
-    device_id text,
-    device_label text,
-    location_id text,
-    map_id text,
-    payload jsonb NOT NULL,
-    payload_sha256 text NOT NULL,
-    PRIMARY KEY (received_at, id)
-);
-
-SELECT create_hypertable('cisco_spaces_raw_events', 'received_at', if_not_exists => true);
-
-CREATE INDEX IF NOT EXISTS cisco_spaces_raw_events_record_uid_idx
-    ON cisco_spaces_raw_events (record_uid)
-    WHERE record_uid IS NOT NULL;
-
-CREATE INDEX IF NOT EXISTS cisco_spaces_raw_events_device_received_idx
-    ON cisco_spaces_raw_events (device_mac, received_at DESC);
-
-CREATE INDEX IF NOT EXISTS cisco_spaces_raw_events_received_idx
-    ON cisco_spaces_raw_events (received_at DESC);
-
 CREATE TABLE IF NOT EXISTS energy_devices (
     source text NOT NULL,
     device_key text NOT NULL,
