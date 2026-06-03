@@ -88,3 +88,10 @@ status. Alarm rules, APNs push notifications, admin webhook delivery, and
 maintenance mode were removed. Migration `0008_drop_alarm_features.sql` drops
 the old alarm/APNs/webhook tables and device maintenance columns, so deployments
 that have not yet applied it should treat it as a deliberate schema cleanup.
+
+Cisco Spaces raw event storage has also been retired. Migration
+`0011_drop_cisco_spaces_raw_events.sql` drops the existing
+`cisco_spaces_raw_events` table, which deletes any raw firehose payloads kept for
+debug/replay. After this migration, Cisco Spaces collection stores only
+normalized `sensor_minute` readings and `collector_status`; raw event export and
+replay are no longer part of the operational model.

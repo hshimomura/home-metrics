@@ -23,6 +23,14 @@ bins=(
 
 mkdir -p "$build_dir" "$go_cache" "$go_mod_cache"
 
+retired_bins=(
+  hm-cisco-spaces-export-raw
+)
+
+for bin in "${retired_bins[@]}"; do
+  rm -f "$build_dir/$bin"
+done
+
 for bin in "${bins[@]}"; do
   echo "building $build_dir/$bin"
   GOCACHE="$go_cache" GOMODCACHE="$go_mod_cache" go build -o "$build_dir/$bin" "./cmd/$bin"

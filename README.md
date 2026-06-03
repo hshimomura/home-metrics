@@ -57,6 +57,10 @@ tables and the old device maintenance columns from existing databases.
 Migrations `` and
 `` update existing user-facing
 Cisco Sensor Connect device type labels.
+Migration `0011_drop_cisco_spaces_raw_events.sql` removes the retired Cisco
+Spaces raw event table from existing databases. Cisco Spaces firehose data is
+now decoded directly into `sensor_minute`; the collector keeps runtime state in
+`collector_status` and no longer stores raw firehose payloads for replay/export.
 
 ## Configuration
 
@@ -87,6 +91,10 @@ failures, or has not updated within this duration.
 admin summary will show it as disabled instead of treating the stale
 `collector_status` row as an alert. Set it to `true` only when the Cisco Spaces
 firehose collector is expected to be running.
+
+The Cisco Spaces firehose collector does not keep a raw event database. It
+decodes incoming events and stores only the normalized minute-level sensor data
+plus collector status.
 
 ## Docker Compose
 
