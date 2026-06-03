@@ -18,14 +18,19 @@ func (api *apiServer) handleHealthDetails(w http.ResponseWriter, r *http.Request
 	var res healthDetailsResponse
 	res.Status = "ok"
 	res.Database = "ok"
+	excludedCollector := ""
+	if !ciscoSpacesCollectorEnabled() {
+		excludedCollector = "hm-cisco-spaces-collector"
+	}
 	err := api.db.QueryRow(r.Context(), `
 		SELECT
-			(SELECT count(*) FROM collector_status),
+			(SELECT count(*) FROM collector_status WHERE collector_name <> $2),
 			(SELECT count(*) FROM collector_status
-			 WHERE last_success_at IS NULL
-			    OR consecutive_failures > 0
-			    OR updated_at < now() - $1::interval)
-	`, intervalSeconds(envDuration("COLLECTOR_STATUS_STALE_AFTER", 5*time.Minute))).Scan(&res.CollectorTargets, &res.StaleCollectors)
+			 WHERE collector_name <> $2
+			   AND (last_success_at IS NULL
+			        OR consecutive_failures > 0
+			        OR updated_at < now() - $1::interval))
+	`, intervalSeconds(envDuration("COLLECTOR_STATUS_STALE_AFTER", 5*time.Minute)), excludedCollector).Scan(&res.CollectorTargets, &res.StaleCollectors)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "query health details")
 		return
@@ -69,6 +74,7 @@ func (api *apiServer) handleSchema(w http.ResponseWriter, r *http.Request) {
 
 func (api *apiServer) handleCiscoSpacesFirehoseStatus(w http.ResponseWriter, r *http.Request) {
 	res := ciscoSpacesFirehoseStatusResponse{
+		CollectorEnabled:           ciscoSpacesCollectorEnabled(),
 		LockKey:                    ciscoSpacesFirehoseLockKey,
 		ConfiguredSecondaryAllowed: envBool("CISCO_SPACES_ALLOW_SECONDARY", false),
 	}
@@ -137,7 +143,11 @@ func (api *apiServer) handleCiscoSpacesFirehoseStatus(w http.ResponseWriter, r *
 			res.CollectorReporting = time.Since(*res.CollectorUpdatedAt) < window
 		}
 	}
-	res.Mode = "not-running"
+	res.Mode = "disabled"
+	if !res.CollectorEnabled {
+		writeJSON(w, http.StatusOK, res)
+		return
+	}
 	if res.LockHeld {
 		res.Mode = "primary-lock-held"
 	} else if res.CollectorReporting {
@@ -146,6 +156,10 @@ func (api *apiServer) handleCiscoSpacesFirehoseStatus(w http.ResponseWriter, r *
 		res.Mode = "secondary-allowed-idle"
 	}
 	writeJSON(w, http.StatusOK, res)
+}
+
+func ciscoSpacesCollectorEnabled() bool {
+	return envBool("CISCO_SPACES_COLLECTOR_ENABLED", false)
 }
 
 func (api *apiServer) handleCollectorStatus(w http.ResponseWriter, r *http.Request) {

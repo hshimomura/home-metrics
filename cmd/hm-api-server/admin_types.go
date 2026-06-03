@@ -46,6 +46,7 @@ type ciscoSpacesFirehoseStatusResponse struct {
 	LockHeld                   bool       `json:"lock_held"`
 	LockHolderPID              *int32     `json:"lock_holder_pid,omitempty"`
 	Mode                       string     `json:"mode"`
+	CollectorEnabled           bool       `json:"collector_enabled"`
 	ConfiguredSecondaryAllowed bool       `json:"configured_secondary_allowed"`
 	CollectorStatusPresent     bool       `json:"collector_status_present"`
 	CollectorReporting         bool       `json:"collector_reporting"`

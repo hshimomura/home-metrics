@@ -158,9 +158,10 @@
     }
 
     function renderCiscoFirehose(item) {
-      const lock = item.lock_held ? pill('ok') : pill(item.collector_status_present || item.configured_secondary_allowed ? 'warning' : 'disabled');
-      const reporting = item.collector_reporting ? pill('ok') : pill(item.collector_status_present ? 'warning' : 'disabled');
-      const secondary = item.configured_secondary_allowed ? pill('warning') : pill('ok');
+      const collectorEnabled = item.collector_enabled === true;
+      const lock = !collectorEnabled ? pill('disabled') : (item.lock_held ? pill('ok') : pill(item.collector_status_present || item.configured_secondary_allowed ? 'warning' : 'disabled'));
+      const reporting = !collectorEnabled ? pill('disabled') : (item.collector_reporting ? pill('ok') : pill(item.collector_status_present ? 'warning' : 'disabled'));
+      const secondary = !collectorEnabled ? pill('disabled') : (item.configured_secondary_allowed ? pill('warning') : pill('ok'));
       const items = [
         ['Mode', `<code>${escapeHTML(item.mode)}</code>`],
         ['Advisory lock', `${lock}<div class="muted">key ${escapeHTML(item.lock_key)}${item.lock_holder_pid ? ` / pid ${escapeHTML(item.lock_holder_pid)}` : ''}</div>`],

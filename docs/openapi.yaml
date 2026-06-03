@@ -324,6 +324,7 @@ components:
         - lock_key
         - lock_held
         - mode
+        - collector_enabled
         - configured_secondary_allowed
         - collector_status_present
         - collector_reporting
@@ -337,6 +338,8 @@ components:
           type: integer
         mode:
           type: string
+        collector_enabled:
+          type: boolean
         configured_secondary_allowed:
           type: boolean
         collector_status_present:

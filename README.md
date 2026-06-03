@@ -75,11 +75,15 @@ API_TOKEN=change-me
 API_REQUIRE_TOKEN=false
 API_ALLOWED_ORIGINS=http://localhost:8080
 COLLECTOR_STATUS_STALE_AFTER=5m
+CISCO_SPACES_COLLECTOR_ENABLED=false
 ```
 
 `COLLECTOR_STATUS_STALE_AFTER` controls `/api/health/details` and the admin UI
 summary. A collector is stale when it has never succeeded, has consecutive
 failures, or has not updated within this duration.
+`hm-cisco-spaces-collector` is excluded from this stale summary unless
+`CISCO_SPACES_COLLECTOR_ENABLED=true`, because the Cisco Spaces firehose
+collector is intentionally stopped in the normal Sensor Connect deployment.
 
 ## Docker Compose
 
