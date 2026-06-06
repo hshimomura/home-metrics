@@ -141,6 +141,96 @@ func TestDecodeBLEPayloadExtractsEnvServiceData(t *testing.T) {
 	}
 }
 
+func TestDecodeBLEPayloadExtractsXiaomiFlowerCareServiceData(t *testing.T) {
+	cases := []struct {
+		name         string
+		payloadHex   string
+		assertMetric func(t *testing.T, got bleReading)
+	}{
+		{
+			name:       "soil moisture",
+			payloadHex: "020106030295fe131695fe71209800977d73147e855c0d0810010b",
+			assertMetric: func(t *testing.T, got bleReading) {
+				if got.SoilMoisturePercent == nil || *got.SoilMoisturePercent != 11 {
+					t.Fatalf("soil moisture=%v, want 11", got.SoilMoisturePercent)
+				}
+				if got.HumidityPercent != nil {
+					t.Fatalf("humidity=%v, want nil", got.HumidityPercent)
+				}
+			},
+		},
+		{
+			name:       "conductivity",
+			payloadHex: "020106030295fe141695fe71209800987d73147e855c0d0910024100",
+			assertMetric: func(t *testing.T, got bleReading) {
+				if got.ConductivityUSCM == nil || *got.ConductivityUSCM != 65 {
+					t.Fatalf("conductivity=%v, want 65", got.ConductivityUSCM)
+				}
+			},
+		},
+		{
+			name:       "temperature",
+			payloadHex: "020106030295fe141695fe71209800997d73147e855c0d0410020601",
+			assertMetric: func(t *testing.T, got bleReading) {
+				if got.TemperatureC == nil || *got.TemperatureC != 26.2 {
+					t.Fatalf("temperature=%v, want 26.2", got.TemperatureC)
+				}
+			},
+		},
+		{
+			name:       "lux",
+			payloadHex: "020106030295fe151695fe712098009a7d73147e855c0d071003be0700",
+			assertMetric: func(t *testing.T, got bleReading) {
+				if got.Lux == nil || *got.Lux != 1982 {
+					t.Fatalf("lux=%v, want 1982", got.Lux)
+				}
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := decodeBLEPayload(mustHex(t, tc.payloadHex))
+			tc.assertMetric(t, got)
+		})
+	}
+}
+
+func TestCollectorAggregatesSparseFlowerCareAdvertisements(t *testing.T) {
+	window := time.Date(2026, 6, 6, 9, 10, 0, 0, time.UTC)
+	c := &collector{windows: map[string]*aggregate{}}
+	c.add(bleReading{
+		TS:                  window.Add(5 * time.Second),
+		SensorMAC:           "5c:85:7e:14:73:7d",
+		Label:               "blue berry 1",
+		SensorCategory:          "Cisco Sensor Connect (IoT Orchestrator)",
+		SoilMoisturePercent: floatPtr(11),
+	})
+	c.add(bleReading{
+		TS:               window.Add(15 * time.Second),
+		SensorMAC:        "5c:85:7e:14:73:7d",
+		Label:            "blue berry 1",
+		SensorCategory:       "Cisco Sensor Connect (IoT Orchestrator)",
+		ConductivityUSCM: floatPtr(65),
+	})
+
+	agg := c.windows["5c:85:7e:14:73:7d|"+window.Format(time.RFC3339)]
+	if agg == nil {
+		t.Fatal("aggregate not found")
+	}
+	if agg.SensorCategory != "Cisco Sensor Connect (IoT Orchestrator)" {
+		t.Fatalf("device type=%q, want plant type", agg.SensorCategory)
+	}
+	if got := nullableMedianFloat(agg.SoilMoisturePercent); got == nil || *got != 11 {
+		t.Fatalf("soil moisture median=%v, want 11", got)
+	}
+	if got := nullableMedianFloat(agg.ConductivityUSCM); got == nil || *got != 65 {
+		t.Fatalf("conductivity median=%v, want 65", got)
+	}
+	if len(agg.HumidityPercent) != 0 {
+		t.Fatalf("humidity samples=%v, want none", agg.HumidityPercent)
+	}
+}
+
 func TestDecodeBLEPayloadIgnoresMarkersOutsideServiceData(t *testing.T) {
 	adv := mustHex(t, "0201060313000011166afe02800206530432355a6930303032")
 	got := decodeBLEPayload(adv)

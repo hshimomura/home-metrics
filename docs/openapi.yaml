@@ -182,6 +182,8 @@ components:
         - co2_ppm
         - lux
         - etvoc
+        - soil_moisture_percent
+        - conductivity_us_cm
     Device:
       type: object
       required: [mac, label, enabled]

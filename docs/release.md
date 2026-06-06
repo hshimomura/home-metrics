@@ -95,3 +95,10 @@ Cisco Spaces raw event storage has also been retired. Migration
 debug/replay. After this migration, Cisco Spaces collection stores only
 normalized `sensor_minute` readings and `collector_status`; raw event export and
 replay are no longer part of the operational model.
+
+Xiaomi Flower Care / MiFlora style plant sensors are supported through Cisco
+Sensor Connect advertisement telemetry. Migration
+`0012_add_plant_sensor_metrics.sql` adds `soil_moisture_percent` and
+`conductivity_us_cm` to `sensor_minute` and the rollup tables so plant readings
+can use the same latest/series API and web UI as the existing environmental
+metrics.

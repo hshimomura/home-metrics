@@ -31,6 +31,8 @@ func TestMetricColumns(t *testing.T) {
 		"co2_ppm",
 		"lux",
 		"etvoc",
+		"soil_moisture_percent",
+		"conductivity_us_cm",
 	} {
 		if metricColumns[metric] != metric {
 			t.Fatalf("metricColumns[%q] = %q, want %q", metric, metricColumns[metric], metric)

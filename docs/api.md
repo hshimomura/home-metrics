@@ -61,7 +61,8 @@ Returns the latest aggregated sensor values for one device from `sensor_minute`.
 Query parameters:
 
 - `metric`: one of `temperature_c`, `humidity_percent`, `battery_percent`,
-  `rssi_dbm`, `pressure_hpa`, `co2_ppm`, `lux`, `etvoc`.
+  `rssi_dbm`, `pressure_hpa`, `co2_ppm`, `lux`, `etvoc`,
+  `soil_moisture_percent`, `conductivity_us_cm`.
 - `range`: one of `1d`, `1w`, `1m`, `3m`, `1y`. Defaults to `1d`.
 
 ## Energy

@@ -82,32 +82,40 @@ type targetConfig struct {
 }
 
 type bleReading struct {
-	TS              time.Time
-	SensorMAC       string
-	Label           string
-	RSSI            *float64
-	TemperatureC    *float64
-	HumidityPercent *float64
-	BatteryPercent  *float64
-	PressureHPa     *float64
-	CO2PPM          *float64
-	Lux             *float64
-	ETVOC           *float64
+	TS                  time.Time
+	SensorMAC           string
+	Label               string
+	SensorCategory          string
+	Location            string
+	RSSI                *float64
+	TemperatureC        *float64
+	HumidityPercent     *float64
+	BatteryPercent      *float64
+	PressureHPa         *float64
+	CO2PPM              *float64
+	Lux                 *float64
+	ETVOC               *float64
+	SoilMoisturePercent *float64
+	ConductivityUSCM    *float64
 }
 
 type aggregate struct {
-	SensorMAC       string
-	Label           string
-	Window          time.Time
-	RSSI            []float64
-	TemperatureC    []float64
-	HumidityPercent []float64
-	BatteryPercent  []float64
-	PressureHPa     []float64
-	CO2PPM          []float64
-	Lux             []float64
-	ETVOC           []float64
-	LastComparable  string
+	SensorMAC           string
+	Label               string
+	SensorCategory          string
+	Location            string
+	Window              time.Time
+	RSSI                []float64
+	TemperatureC        []float64
+	HumidityPercent     []float64
+	BatteryPercent      []float64
+	PressureHPa         []float64
+	CO2PPM              []float64
+	Lux                 []float64
+	ETVOC               []float64
+	SoilMoisturePercent []float64
+	ConductivityUSCM    []float64
+	LastComparable      string
 }
 
 type collector struct {
@@ -377,6 +385,8 @@ func decodeDataBatch(payload []byte, targets map[string]targetDevice) ([]bleRead
 		}
 		decoded.SensorMAC = mac
 		decoded.Label = target.Label
+		decoded.SensorCategory = strings.TrimSpace(target.SensorCategory)
+		decoded.Location = strings.TrimSpace(target.Location)
 		if msg.RSSI != nil {
 			decoded.RSSI = floatPtr(float64(*msg.RSSI))
 		}
@@ -811,7 +821,7 @@ func serviceDataFromAdvertisement(data []byte) [][]byte {
 		adData := data[2 : length+1]
 		if adType == 0x16 && len(adData) >= 2 {
 			uuid := binary.LittleEndian.Uint16(adData[:2])
-			if uuid == 0xfe6a || uuid == 0xffe1 || uuid == 0xfeaa {
+			if uuid == 0xfe6a || uuid == 0xffe1 || uuid == 0xfeaa || uuid == 0xfe95 {
 				out = append(out, adData[2:])
 			}
 		}
@@ -873,7 +883,51 @@ func decodeServiceData(payloadHex string) bleReading {
 			r.Lux = floatPtr(float64(uint16(data[idx+2]) | uint16(data[idx+3])<<8))
 		}
 	}
+	r.merge(decodeXiaomiFE95(data))
 	return sanitizeReading(r)
+}
+
+func decodeXiaomiFE95(data []byte) bleReading {
+	r := bleReading{}
+	if len(data) < 15 {
+		return r
+	}
+	if data[0] != 0x71 || data[1] != 0x20 || data[2] != 0x98 || data[3] != 0x00 {
+		return r
+	}
+	for offset := 12; offset+3 <= len(data); {
+		objectID := uint16(data[offset]) | uint16(data[offset+1])<<8
+		length := int(data[offset+2])
+		valueStart := offset + 3
+		valueEnd := valueStart + length
+		if valueEnd > len(data) {
+			break
+		}
+		value := data[valueStart:valueEnd]
+		switch objectID {
+		case 0x1004:
+			if len(value) >= 2 {
+				raw := int16(uint16(value[0]) | uint16(value[1])<<8)
+				r.TemperatureC = floatPtr(round(float64(raw)/10.0, 1))
+			}
+		case 0x1007:
+			if len(value) >= 3 {
+				lux := uint32(value[0]) | uint32(value[1])<<8 | uint32(value[2])<<16
+				r.Lux = floatPtr(float64(lux))
+			}
+		case 0x1008:
+			if len(value) >= 1 {
+				r.SoilMoisturePercent = floatPtr(float64(value[0]))
+			}
+		case 0x1009:
+			if len(value) >= 2 {
+				conductivity := uint16(value[0]) | uint16(value[1])<<8
+				r.ConductivityUSCM = floatPtr(float64(conductivity))
+			}
+		}
+		offset = valueEnd
+	}
+	return r
 }
 
 func sanitizeReading(r bleReading) bleReading {
@@ -885,6 +939,8 @@ func sanitizeReading(r bleReading) bleReading {
 	r.CO2PPM = sanitizeRange(r.CO2PPM, 0, 10000)
 	r.Lux = sanitizeRange(r.Lux, 0, 65534)
 	r.ETVOC = sanitizeRange(r.ETVOC, 0, 60000)
+	r.SoilMoisturePercent = sanitizeRange(r.SoilMoisturePercent, 0, 100)
+	r.ConductivityUSCM = sanitizeRange(r.ConductivityUSCM, 0, 10000)
 	return r
 }
 
@@ -910,6 +966,12 @@ func (r *bleReading) merge(other bleReading) {
 	if other.ETVOC != nil {
 		r.ETVOC = other.ETVOC
 	}
+	if other.SoilMoisturePercent != nil {
+		r.SoilMoisturePercent = other.SoilMoisturePercent
+	}
+	if other.ConductivityUSCM != nil {
+		r.ConductivityUSCM = other.ConductivityUSCM
+	}
 }
 
 func (r bleReading) empty() bool {
@@ -920,7 +982,9 @@ func (r bleReading) empty() bool {
 		r.PressureHPa == nil &&
 		r.CO2PPM == nil &&
 		r.Lux == nil &&
-		r.ETVOC == nil
+		r.ETVOC == nil &&
+		r.SoilMoisturePercent == nil &&
+		r.ConductivityUSCM == nil
 }
 
 func (c *collector) add(r bleReading) {
@@ -928,7 +992,7 @@ func (c *collector) add(r bleReading) {
 	key := r.SensorMAC + "|" + window.Format(time.RFC3339)
 	agg := c.windows[key]
 	if agg == nil {
-		agg = &aggregate{SensorMAC: r.SensorMAC, Label: r.Label, Window: window}
+		agg = &aggregate{SensorMAC: r.SensorMAC, Label: r.Label, SensorCategory: r.SensorCategory, Location: r.Location, Window: window}
 		c.windows[key] = agg
 	}
 	comparable := readingKey(r)
@@ -944,6 +1008,8 @@ func (c *collector) add(r bleReading) {
 	appendPtr(&agg.CO2PPM, r.CO2PPM)
 	appendPtr(&agg.Lux, r.Lux)
 	appendPtr(&agg.ETVOC, r.ETVOC)
+	appendPtr(&agg.SoilMoisturePercent, r.SoilMoisturePercent)
+	appendPtr(&agg.ConductivityUSCM, r.ConductivityUSCM)
 }
 
 func (c *collector) flushCompleted(ctx context.Context, currentWindow time.Time) (int, error) {
@@ -1005,15 +1071,16 @@ func (c *collector) flush(ctx context.Context, agg *aggregate) (bool, error) {
 	if c.db == nil || agg.empty() {
 		return false, nil
 	}
-	if err := upsertDevice(ctx, c.db, agg.SensorMAC, agg.Label); err != nil {
+	if err := upsertDevice(ctx, c.db, agg.SensorMAC, agg.Label, agg.SensorCategory, agg.Location); err != nil {
 		return false, err
 	}
 	_, err := c.db.Exec(ctx, `
 		INSERT INTO sensor_minute (
 			ts, mac, temperature_c, humidity_percent, battery_percent,
-			rssi_dbm, pressure_hpa, co2_ppm, lux, etvoc
+			rssi_dbm, pressure_hpa, co2_ppm, lux, etvoc,
+			soil_moisture_percent, conductivity_us_cm
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 		ON CONFLICT (ts, mac) DO UPDATE SET
 			temperature_c = COALESCE(EXCLUDED.temperature_c, sensor_minute.temperature_c),
 			humidity_percent = COALESCE(EXCLUDED.humidity_percent, sensor_minute.humidity_percent),
@@ -1023,6 +1090,8 @@ func (c *collector) flush(ctx context.Context, agg *aggregate) (bool, error) {
 			co2_ppm = COALESCE(EXCLUDED.co2_ppm, sensor_minute.co2_ppm),
 			lux = COALESCE(EXCLUDED.lux, sensor_minute.lux),
 			etvoc = COALESCE(EXCLUDED.etvoc, sensor_minute.etvoc),
+			soil_moisture_percent = COALESCE(EXCLUDED.soil_moisture_percent, sensor_minute.soil_moisture_percent),
+			conductivity_us_cm = COALESCE(EXCLUDED.conductivity_us_cm, sensor_minute.conductivity_us_cm),
 			inserted_at = now()
 	`, agg.Window, agg.SensorMAC,
 		nullablePtr(nullableMedianFloat(agg.TemperatureC)),
@@ -1033,6 +1102,8 @@ func (c *collector) flush(ctx context.Context, agg *aggregate) (bool, error) {
 		nullablePtr(nullableMedianFloat(agg.CO2PPM)),
 		nullablePtr(nullableMedianFloat(agg.Lux)),
 		nullablePtr(nullableMedianFloat(agg.ETVOC)),
+		nullablePtr(nullableMedianFloat(agg.SoilMoisturePercent)),
+		nullablePtr(nullableMedianFloat(agg.ConductivityUSCM)),
 	)
 	if err != nil {
 		return false, fmt.Errorf("insert %s %s: %w", agg.SensorMAC, agg.Window.Format(time.RFC3339), err)
@@ -1043,17 +1114,25 @@ func (c *collector) flush(ctx context.Context, agg *aggregate) (bool, error) {
 
 func ensureDevices(ctx context.Context, db *pgx.Conn, targets map[string]targetDevice) error {
 	for _, target := range targets {
-		if err := upsertDevice(ctx, db, target.MAC, target.Label); err != nil {
+		if err := upsertDevice(ctx, db, target.MAC, target.Label, target.SensorCategory, target.Location); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func upsertDevice(ctx context.Context, db *pgx.Conn, mac string, label string) error {
+func upsertDevice(ctx context.Context, db *pgx.Conn, mac string, label string, deviceType string, location string) error {
 	label = strings.TrimSpace(label)
 	if label == "" || normalizeMAC(label) == mac {
 		label = mac
+	}
+	deviceType = strings.TrimSpace(deviceType)
+	if deviceType == "" {
+		deviceType = sensorConnectSensorCategory
+	}
+	location = strings.TrimSpace(location)
+	if location == "" {
+		location = label
 	}
 	_, err := db.Exec(ctx, `
 		INSERT INTO devices (mac, label, sensor_category, location)
@@ -1067,7 +1146,7 @@ func upsertDevice(ctx context.Context, db *pgx.Conn, mac string, label string) e
 			END,
 			location = COALESCE(devices.location, EXCLUDED.location),
 			updated_at = now()
-	`, mac, label, sensorConnectSensorCategory, label)
+	`, mac, label, deviceType, location)
 	return err
 }
 
@@ -1112,12 +1191,14 @@ func (agg *aggregate) empty() bool {
 		len(agg.PressureHPa) == 0 &&
 		len(agg.CO2PPM) == 0 &&
 		len(agg.Lux) == 0 &&
-		len(agg.ETVOC) == 0
+		len(agg.ETVOC) == 0 &&
+		len(agg.SoilMoisturePercent) == 0 &&
+		len(agg.ConductivityUSCM) == 0
 }
 
 func readingKey(r bleReading) string {
 	return fmt.Sprintf(
-		"rssi=%s|t=%s|h=%s|b=%s|p=%s|co2=%s|lux=%s|etvoc=%s",
+		"rssi=%s|t=%s|h=%s|b=%s|p=%s|co2=%s|lux=%s|etvoc=%s|soil=%s|cond=%s",
 		ptrKey(r.RSSI),
 		ptrKey(r.TemperatureC),
 		ptrKey(r.HumidityPercent),
@@ -1126,6 +1207,8 @@ func readingKey(r bleReading) string {
 		ptrKey(r.CO2PPM),
 		ptrKey(r.Lux),
 		ptrKey(r.ETVOC),
+		ptrKey(r.SoilMoisturePercent),
+		ptrKey(r.ConductivityUSCM),
 	)
 }
 

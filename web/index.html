@@ -65,7 +65,7 @@
     <section>
       <h2>Devices</h2>
       <table>
-        <thead><tr><th>MAC</th><th>Label</th><th>Type</th><th>Latest</th><th>Temperature</th><th>Humidity</th><th>Battery</th><th>Lux</th><th>CO2</th></tr></thead>
+        <thead><tr><th>MAC</th><th>Label</th><th>Type</th><th>Latest</th><th>Temperature</th><th>Humidity</th><th>Soil</th><th>Fertility</th><th>Battery</th><th>Lux</th><th>CO2</th></tr></thead>
         <tbody id="devices"></tbody>
       </table>
     </section>
@@ -139,6 +139,8 @@
       { key: 'humidity_percent', label: 'Humidity', unit: '%', digits: 1 },
       { key: 'battery_percent', label: 'Battery', unit: '%', digits: 0 },
       { key: 'lux', label: 'Lux', unit: 'lx', digits: 0 },
+      { key: 'soil_moisture_percent', label: 'Soil', unit: '%', digits: 0 },
+      { key: 'conductivity_us_cm', label: 'Fertility', unit: 'uS/cm', digits: 0 },
       { key: 'co2_ppm', label: 'CO2', unit: 'ppm', digits: 0 },
       { key: 'pressure_hpa', label: 'Pressure', unit: 'hPa', digits: 1 },
       { key: 'etvoc', label: 'eTVOC', unit: '', digits: 0 },
@@ -236,7 +238,7 @@
         }));
         document.querySelector('#devices').innerHTML = latest.map(({ device, latest }) => {
           const values = latest?.values || {};
-          return `<tr><td><button class="link-button" data-mac="${escapeHTML(device.mac)}">${escapeHTML(device.mac)}</button></td><td>${escapeHTML(device.label)}</td><td>${escapeHTML(cell(device.sensor_category))}</td><td>${escapeHTML(cell(latest?.ts))}</td><td>${number(values.temperature_c)}</td><td>${number(values.humidity_percent)}</td><td>${number(values.battery_percent, 0)}</td><td>${number(values.lux, 0)}</td><td>${number(values.co2_ppm, 0)}</td></tr>`;
+          return `<tr><td><button class="link-button" data-mac="${escapeHTML(device.mac)}">${escapeHTML(device.mac)}</button></td><td>${escapeHTML(device.label)}</td><td>${escapeHTML(cell(device.sensor_category))}</td><td>${escapeHTML(cell(latest?.ts))}</td><td>${number(values.temperature_c)}</td><td>${number(values.humidity_percent)}</td><td>${number(values.soil_moisture_percent, 0)}</td><td>${number(values.conductivity_us_cm, 0)}</td><td>${number(values.battery_percent, 0)}</td><td>${number(values.lux, 0)}</td><td>${number(values.co2_ppm, 0)}</td></tr>`;
         }).join('');
         if (!selectedDevice && latest.length) {
           await selectDevice(latest[0].device);

@@ -83,6 +83,8 @@ func refreshRollup(ctx context.Context, db *pgx.Conn, target string, bucket stri
 			co2_ppm,
 			lux,
 			etvoc,
+			soil_moisture_percent,
+			conductivity_us_cm,
 			updated_at
 		)
 		SELECT
@@ -96,6 +98,8 @@ func refreshRollup(ctx context.Context, db *pgx.Conn, target string, bucket stri
 			avg(co2_ppm),
 			avg(lux),
 			avg(etvoc),
+			avg(soil_moisture_percent),
+			avg(conductivity_us_cm),
 			now()
 		FROM ` + source + `
 		WHERE ts >= now() - $2::interval
@@ -109,6 +113,8 @@ func refreshRollup(ctx context.Context, db *pgx.Conn, target string, bucket stri
 			co2_ppm = EXCLUDED.co2_ppm,
 			lux = EXCLUDED.lux,
 			etvoc = EXCLUDED.etvoc,
+			soil_moisture_percent = EXCLUDED.soil_moisture_percent,
+			conductivity_us_cm = EXCLUDED.conductivity_us_cm,
 			updated_at = now()
 	`
 	tag, err := db.Exec(ctx, command, bucket, intervalSeconds(lookback))

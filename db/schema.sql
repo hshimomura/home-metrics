@@ -28,6 +28,8 @@ CREATE TABLE IF NOT EXISTS sensor_minute (
     co2_ppm double precision,
     lux double precision,
     etvoc double precision,
+    soil_moisture_percent double precision,
+    conductivity_us_cm double precision,
     inserted_at timestamptz NOT NULL DEFAULT now(),
     PRIMARY KEY (ts, mac)
 );
@@ -48,6 +50,8 @@ CREATE TABLE IF NOT EXISTS sensor_1hour (
     co2_ppm double precision,
     lux double precision,
     etvoc double precision,
+    soil_moisture_percent double precision,
+    conductivity_us_cm double precision,
     updated_at timestamptz NOT NULL DEFAULT now(),
     PRIMARY KEY (ts, mac)
 );
@@ -68,6 +72,8 @@ CREATE TABLE IF NOT EXISTS sensor_12hour (
     co2_ppm double precision,
     lux double precision,
     etvoc double precision,
+    soil_moisture_percent double precision,
+    conductivity_us_cm double precision,
     updated_at timestamptz NOT NULL DEFAULT now(),
     PRIMARY KEY (ts, mac)
 );
@@ -88,6 +94,8 @@ CREATE TABLE IF NOT EXISTS sensor_1day (
     co2_ppm double precision,
     lux double precision,
     etvoc double precision,
+    soil_moisture_percent double precision,
+    conductivity_us_cm double precision,
     updated_at timestamptz NOT NULL DEFAULT now(),
     PRIMARY KEY (ts, mac)
 );

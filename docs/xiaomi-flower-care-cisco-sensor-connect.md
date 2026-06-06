@@ -1,8 +1,8 @@
-# Xiaomi Flower Care Preparation for Cisco Sensor Connect
+# Xiaomi Flower Care Design for Cisco Sensor Connect
 
-This note collects preparation details for testing a Xiaomi Flower Care Plant
-Sensor, also known as MiFlora or `HHCCJCY01`, with Cisco Sensor Connect
-(IoT Orchestrator).
+This note collects design and implementation details for supporting Xiaomi
+Flower Care Plant Sensor devices, also known as MiFlora or `HHCCJCY01`, with
+Cisco Sensor Connect (IoT Orchestrator).
 
 The target is to determine whether the sensor can be handled through the Cisco
 AP infrastructure and whether `home-metrics` should support it as a plant sensor
@@ -101,6 +101,20 @@ The first test should stay close to the current Minew S1 flow:
 5. Capture MQTT advertisement messages and inspect whether service data includes
    Xiaomi `FE95` data.
 
+This path has been validated with a real Flower Care device:
+
+- MAC: `5c:85:7e:14:73:7d`
+- Label: `blue berry 1`
+- SCIM device ID: `48c71db0-ce81-43c2-849f-5da7fef23ec4`
+- SCIM application IDs: `onboard`, `control`, and `data`
+- `isRandom`: `false`
+- MQTT topic: `ioslab/home-metrics/ble/advertisements/v1`
+
+The device was not reachable from the `pve2` local BLE scanner after being
+placed in soil, but Cisco AP reception through Sensor Connect did receive the
+advertisements. This confirms that the Cisco AP infrastructure is the relevant
+ingest path for this placement.
+
 If advertisements are not sufficient, use the connected GATT path:
 
 1. Discover services for the onboarded device.
@@ -173,9 +187,38 @@ Xiaomi `FE95` / MiFlora payloads. It currently extracts service data for known
 Minew / Env formats and decodes temperature, humidity, battery, RSSI, pressure,
 CO2, lux, and eTVOC.
 
-When the sensor arrives, capture the MQTT advertisement payload first. Then add
-decoder support only after confirming the actual AP/MQTT payload shape. Expected
-work:
+The observed Sensor Connect MQTT message carries the full BLE advertisement in
+the protobuf `DataSubscription.data` bytes. The `FE95` service data is embedded
+inside a standard advertisement data structure:
+
+```text
+020106030295fe131695fe71209800977d73147e855c0d0810010b
+```
+
+The service-data portion is:
+
+```text
+71209800977d73147e855c0d0810010b
+```
+
+The embedded MAC bytes `7d73147e855c` are the reverse of
+`5c:85:7e:14:73:7d`.
+
+Observed object IDs and values:
+
+| Object ID | Payload example | Meaning | Decoded value | Verified against app |
+| --- | --- | --- | --- | --- |
+| `0x1004` | `0d0410020601` | temperature | `26.2 C` | same value family |
+| `0x1007` | `0d071003be0700` | illuminance | `1982 lux` | same value family |
+| `0x1008` | `0d0810010b` | soil moisture | `11%` | yes |
+| `0x1009` | `0d0910024100` | fertility / conductivity | `65 uS/cm` | yes |
+
+The mobile Flower Care application showed fertility `65` and moisture `11`
+while Sensor Connect delivered `0x1009 = 65` and `0x1008 = 11`. Therefore
+`0x1008` should be treated as soil moisture and `0x1009` should be treated as
+fertility/conductivity.
+
+Expected decoder work:
 
 - include service data UUID `0xfe95` in advertisement extraction
 - identify whether the Flower Care advertisement is plaintext MiBeacon, older
@@ -188,30 +231,133 @@ work:
   is incomplete or encrypted
 - keep connected GATT battery/firmware reads as optional low-frequency polling
 
-Do not map soil moisture to `humidity_percent`. Soil moisture is a different
-measurement and should get its own data model field or a plant-specific table.
+Do not map soil moisture to `humidity_percent`. Both values are percentages,
+but `humidity_percent` means air relative humidity in the current data model,
+while Flower Care `0x1008` means soil moisture. Mixing them would make RoomPlus
+and web UI behavior ambiguous once multiple plant sensors are added.
 
-## home-metrics Data Model Impact
+## Proposed home-metrics Data Model
 
-Current `sensor_minute` has no columns for plant-specific values:
+Current `sensor_minute` has no columns for plant-specific values. Add these
+nullable columns to `sensor_minute` and all rollup tables:
 
-- soil moisture percent
-- conductivity, uS/cm
+```text
+soil_moisture_percent double precision
+conductivity_us_cm double precision
+```
 
-Before storing Flower Care values, decide one of these approaches:
+The DB/API metric name is `conductivity_us_cm`. The Flower Care mobile
+application exposes this value as fertility, but the underlying physical value
+is conductivity measured in `uS/cm`. Use `Fertility` as the user-facing label
+and `conductivity_us_cm` as the storage/API field.
 
-1. Extend `sensor_minute` with `soil_moisture_percent` and
-   `conductivity_us_cm`.
-2. Add plant-specific tables, for example `plant_devices` and
-   `plant_sensor_minute`.
+Use the existing `sensor_minute` table rather than creating a separate plant
+table for the first implementation. The reasons are:
 
-The first approach is simpler and keeps one time-series API. The second approach
-keeps environmental room sensors separate from plant sensors. Because Flower
-Care has plant-specific semantics, the second approach may be cleaner if more
-plant sensors are expected.
+- the data is still one-minute sensor telemetry keyed by time and device MAC
+- the existing API and UI already handle sparse metric columns
+- temperature and lux are shared with existing sensors
+- several Flower Care sensors can be added without adding new tables
+- rollups can use the same median/average refresh strategy as other metrics
 
-For the first test, it is acceptable to decode and log Flower Care MQTT/GATT
-values without writing them to PostgreSQL until the data model decision is made.
+The tradeoff is that `sensor_minute` becomes a general environmental and plant
+telemetry table. This is acceptable because the metrics remain nullable and
+explicitly named. A separate plant schema can still be introduced later if
+plant-specific metadata, calibration, or plant lifecycle records become
+important.
+
+Do not store `0x1008` in `humidity_percent`. Store it only in
+`soil_moisture_percent`.
+
+## Proposed Implementation Plan
+
+Implement support in small, reviewable steps:
+
+1. Add schema support.
+   - Add a numbered migration for `soil_moisture_percent` and
+     `conductivity_us_cm`.
+   - Update `db/schema.sql` for fresh installs.
+   - Add the same columns to `sensor_1hour`, `sensor_12hour`, and
+     `sensor_1day`. This is mandatory because `/api/devices/{mac}/series`
+     serves longer ranges from rollup tables.
+   - Update `hm-db-maint` rollup refresh logic for the two new metrics.
+   - Update `hm-db-check` so operational checks include the plant metrics.
+
+2. Extend internal reading and aggregate types.
+   - Add `SoilMoisturePercent` and `ConductivityUSCM` to the Cisco Sensor
+     Connect collector reading and aggregate structs.
+   - Include both values in minute median aggregation.
+   - Upsert both values into `sensor_minute` using the same
+     `COALESCE(EXCLUDED.value, sensor_minute.value)` pattern as existing
+     sparse advertisement fields.
+   - Extend `targetDevice` usage so `sensor_category` from the sensors file is
+     passed to `upsertDevice`. Flower Care targets should use
+     `Cisco Sensor Connect (IoT Orchestrator)` instead of the generic
+     `Cisco Sensor Connect (IoT Orchestrator)` device type.
+
+3. Decode Xiaomi `FE95` advertisement data.
+   - Update `serviceDataFromAdvertisement` to extract UUID `0xfe95`.
+   - Add a Xiaomi decoder for observed MiBeacon object IDs.
+   - Map `0x1004` to `temperature_c`.
+   - Map `0x1007` to `lux`.
+   - Map `0x1008` to `soil_moisture_percent`.
+   - Map `0x1009` to `conductivity_us_cm`.
+   - Preserve existing Minew and Env decoder behavior.
+
+4. Add tests.
+   - Add decoder fixtures for the real Sensor Connect MQTT advertisement
+     examples captured from `5c:85:7e:14:73:7d`.
+   - Verify that `0x1008` does not populate `humidity_percent`.
+   - Verify sparse message merging across separate advertisements in the same
+     minute window.
+   - Verify schema and API behavior where plant metrics are absent for normal
+     room sensors.
+
+5. Expose the new metrics through API and UI.
+   - Add `soil_moisture_percent` and `conductivity_us_cm` to latest and series
+     queries.
+   - Update the latest query `SELECT`, non-null `OR` condition, and response
+     values map so rows containing only plant metrics can become the latest
+     reading.
+   - Update `docs/openapi.yaml` and `docs/api.md`.
+   - Update the web UI metric list. Suggested labels:
+     `Soil moisture` with unit `%`, and `Fertility` with unit `uS/cm`.
+   - Keep `humidity_percent` displayed as air humidity.
+
+6. Register Flower Care devices as configured targets.
+   - Add each Flower Care MAC to the sensor configuration with a plant-oriented
+     label.
+   - Keep `random=false` for Flower Care public MAC addresses.
+   - Use SCIM onboarding app `onboard`, control app `control`, and data app
+     `data`.
+   - Register the advertisement topic after onboarding.
+
+The first configured Flower Care target is:
+
+```json
+{
+  "mac": "5C:85:7E:14:73:7D",
+  "label": "blue berry 1",
+  "sensor_category": "Cisco Sensor Connect (IoT Orchestrator)"
+}
+```
+
+## Device Type and User-Facing Semantics
+
+Use a plant-specific label for Flower Care devices so users do not confuse soil
+moisture with room humidity. Suggested user-facing device type:
+
+```text
+Cisco Sensor Connect (IoT Orchestrator)
+```
+
+The internal ingest source should stay `cisco_iot_orchestrator` because it
+identifies the transport and deployment path, not the sensor category.
+
+RoomPlus and the web UI should treat `humidity_percent` and
+`soil_moisture_percent` as distinct metrics. If a compact display needs only
+one moisture-like value, choose by metric availability and device type rather
+than by writing soil moisture into the air humidity column.
 
 ## Arrival Checklist
 
@@ -230,8 +376,9 @@ When the device arrives:
    encrypted.
 10. If battery is needed, test connect/write/read/disconnect using the GATT
     characteristics above.
-11. Decide schema support for soil moisture and conductivity.
-12. Implement decoder and tests using captured payloads.
+11. Store `0x1008` as `soil_moisture_percent`.
+12. Store `0x1009` as `conductivity_us_cm`.
+13. Implement decoder and tests using captured payloads.
 
 ## Implementation Notes
 
@@ -240,13 +387,21 @@ Initial code changes are likely to touch:
 - `cmd/hm-cisco-iot-orchestrator-collector/main.go`
 - `cmd/hm-cisco-iot-orchestrator-collector/main_test.go`
 - `db/schema.sql`
-- a new numbered migration if plant values are stored
+- a new numbered migration for plant metric columns
+- `cmd/hm-db-maint/main.go`
+- `cmd/hm-api-server/sensors.go`
+- `cmd/hm-api-server/main_test.go`
+- `cmd/hm-db-check/main.go`
 - `docs/openapi.yaml` and `docs/api.md` if new API fields are exposed
 - `web/index.html` if plant values should be shown in the UI
 
 Potential decoder test fixtures:
 
-- a raw MQTT advertisement carrying `FE95` service data
+- raw MQTT advertisements carrying `FE95` service data:
+  - soil moisture: `020106030295fe131695fe71209800977d73147e855c0d0810010b`
+  - fertility: `020106030295fe141695fe71209800987d73147e855c0d0910024100`
+  - temperature: `020106030295fe141695fe71209800997d73147e855c0d0410020601`
+  - lux: `020106030295fe151695fe712098009a7d73147e855c0d071003be0700`
 - a GATT real-time read response:
   `0e01004802000028d000023c00fb349b`
 - a GATT battery/firmware read response:
@@ -256,14 +411,14 @@ Potential decoder test fixtures:
 
 - Does the purchased unit use model `HHCCJCY01`, `HHCCJCY10`, or another
   variant?
-- Does its firmware broadcast plaintext sensor values, encrypted MiBeacon
-  values, or only discovery information?
 - Can Cisco Sensor Connect reliably perform the required write/read sequence
   against service `1204` without pairing?
 - How many connected BLE slots are available on the nearby AP, and how often can
   battery polling run without affecting other devices?
-- Should plant measurements be part of the existing sensor API or a separate
-  plant API?
+- Should battery and firmware be polled by GATT later, or is advertisement-only
+  operation sufficient for plant monitoring?
+- Should future plant-specific metadata, such as plant name, pot location, and
+  watering threshold, live in `devices` or in a separate plant table?
 
 ## References
 

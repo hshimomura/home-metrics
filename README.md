@@ -25,6 +25,8 @@ db/schema.sql                          fresh DB schema
 db/migrations/                         incremental migrations
 docs/api.md                            REST API reference
 docs/openapi.yaml                      OpenAPI summary
+docs/xiaomi-flower-care-cisco-sensor-connect.md
+                                       Xiaomi Flower Care preparation notes
 web/                                   metrics and admin pages
 ```
 
@@ -61,6 +63,9 @@ Migration `0011_drop_cisco_spaces_raw_events.sql` removes the retired Cisco
 Spaces raw event table from existing databases. Cisco Spaces firehose data is
 now decoded directly into `sensor_minute`; the collector keeps runtime state in
 `collector_status` and no longer stores raw firehose payloads for replay/export.
+Migration `0012_add_plant_sensor_metrics.sql` adds plant sensor columns
+(`soil_moisture_percent` and `conductivity_us_cm`) to `sensor_minute` and all
+rollup tables.
 
 ## Configuration
 
@@ -120,7 +125,8 @@ docker compose --profile cisco-iot up -d hm-cisco-iot-orchestrator-collector
 
 The `hm-cisco-iot-orchestrator-collector` command receives BLE advertisements
 from the IoT Orchestrator MQTT broker and exports decoded temperature, humidity,
-battery, RSSI, lux, CO2, pressure, and eTVOC values to `sensor_minute`.
+battery, RSSI, lux, CO2, pressure, eTVOC, soil moisture, and conductivity values
+to `sensor_minute`.
 
 The internal collector, profile, and environment variable names intentionally
 keep `cisco_iot_orchestrator` / `CISCO_IOT_ORCH_*` because they identify the
@@ -159,6 +165,10 @@ median values to `sensor_minute`, and drops successfully flushed windows.
 so the last minute is written even if no later MQTT message arrives. If database
 writes fail, pending aggregate windows are retained and summarized in logs at
 `CISCO_IOT_ORCH_PENDING_LOG_INTERVAL`.
+
+See
+[docs/xiaomi-flower-care-cisco-sensor-connect.md](docs/xiaomi-flower-care-cisco-sensor-connect.md)
+for preparation notes for testing Xiaomi Flower Care / MiFlora plant sensors.
 
 ## Web UI
 

@@ -33,14 +33,16 @@ type seriesPoint struct {
 }
 
 var metricColumns = map[string]string{
-	"temperature_c":    "temperature_c",
-	"humidity_percent": "humidity_percent",
-	"battery_percent":  "battery_percent",
-	"rssi_dbm":         "rssi_dbm",
-	"pressure_hpa":     "pressure_hpa",
-	"co2_ppm":          "co2_ppm",
-	"lux":              "lux",
-	"etvoc":            "etvoc",
+	"temperature_c":         "temperature_c",
+	"humidity_percent":      "humidity_percent",
+	"battery_percent":       "battery_percent",
+	"rssi_dbm":              "rssi_dbm",
+	"pressure_hpa":          "pressure_hpa",
+	"co2_ppm":               "co2_ppm",
+	"lux":                   "lux",
+	"etvoc":                 "etvoc",
+	"soil_moisture_percent": "soil_moisture_percent",
+	"conductivity_us_cm":    "conductivity_us_cm",
 }
 
 var rangeIntervals = map[string]struct {
@@ -113,7 +115,9 @@ func (api *apiServer) handleDeviceLatest(w http.ResponseWriter, r *http.Request)
 			pressure_hpa,
 			co2_ppm,
 			lux,
-			etvoc
+			etvoc,
+			soil_moisture_percent,
+			conductivity_us_cm
 		FROM sensor_minute
 		WHERE mac = $1
 		  AND (
@@ -123,7 +127,9 @@ func (api *apiServer) handleDeviceLatest(w http.ResponseWriter, r *http.Request)
 		    pressure_hpa IS NOT NULL OR
 		    co2_ppm IS NOT NULL OR
 		    lux IS NOT NULL OR
-		    etvoc IS NOT NULL
+		    etvoc IS NOT NULL OR
+		    soil_moisture_percent IS NOT NULL OR
+		    conductivity_us_cm IS NOT NULL
 		  )
 		ORDER BY ts DESC
 		LIMIT 1
@@ -131,8 +137,8 @@ func (api *apiServer) handleDeviceLatest(w http.ResponseWriter, r *http.Request)
 
 	var ts time.Time
 	values := map[string]*float64{}
-	var temperature, humidity, battery, rssi, pressure, co2, lux, etvoc pgtype.Float8
-	if err := row.Scan(&ts, &temperature, &humidity, &battery, &rssi, &pressure, &co2, &lux, &etvoc); errors.Is(err, pgx.ErrNoRows) {
+	var temperature, humidity, battery, rssi, pressure, co2, lux, etvoc, soilMoisture, conductivity pgtype.Float8
+	if err := row.Scan(&ts, &temperature, &humidity, &battery, &rssi, &pressure, &co2, &lux, &etvoc, &soilMoisture, &conductivity); errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, http.StatusNotFound, "sensor value not found")
 		return
 	} else if err != nil {
@@ -147,6 +153,8 @@ func (api *apiServer) handleDeviceLatest(w http.ResponseWriter, r *http.Request)
 	values["co2_ppm"] = floatPtrFromPg(co2)
 	values["lux"] = floatPtrFromPg(lux)
 	values["etvoc"] = floatPtrFromPg(etvoc)
+	values["soil_moisture_percent"] = floatPtrFromPg(soilMoisture)
+	values["conductivity_us_cm"] = floatPtrFromPg(conductivity)
 
 	writeJSON(w, http.StatusOK, latestResponse{Device: device, TS: ts, Values: values})
 }
