@@ -22,9 +22,10 @@ type deviceResponse struct {
 }
 
 type latestResponse struct {
-	Device deviceResponse      `json:"device"`
-	TS     time.Time           `json:"ts"`
-	Values map[string]*float64 `json:"values"`
+	Device          deviceResponse       `json:"device"`
+	TS              time.Time            `json:"ts"`
+	Values          map[string]*float64  `json:"values"`
+	ValueTimestamps map[string]time.Time `json:"value_timestamps,omitempty"`
 }
 
 type seriesPoint struct {
@@ -32,18 +33,27 @@ type seriesPoint struct {
 	Value float64   `json:"value"`
 }
 
-var metricColumns = map[string]string{
-	"temperature_c":         "temperature_c",
-	"humidity_percent":      "humidity_percent",
-	"battery_percent":       "battery_percent",
-	"rssi_dbm":              "rssi_dbm",
-	"pressure_hpa":          "pressure_hpa",
-	"co2_ppm":               "co2_ppm",
-	"lux":                   "lux",
-	"etvoc":                 "etvoc",
-	"soil_moisture_percent": "soil_moisture_percent",
-	"conductivity_us_cm":    "conductivity_us_cm",
+type sensorMetric struct {
+	Key    string
+	Column string
 }
+
+var sensorMetrics = []sensorMetric{
+	{Key: "temperature_c", Column: "temperature_c"},
+	{Key: "humidity_percent", Column: "humidity_percent"},
+	{Key: "battery_percent", Column: "battery_percent"},
+	{Key: "rssi_dbm", Column: "rssi_dbm"},
+	{Key: "pressure_hpa", Column: "pressure_hpa"},
+	{Key: "co2_ppm", Column: "co2_ppm"},
+	{Key: "lux", Column: "lux"},
+	{Key: "etvoc", Column: "etvoc"},
+	{Key: "soil_moisture_percent", Column: "soil_moisture_percent"},
+	{Key: "conductivity_us_cm", Column: "conductivity_us_cm"},
+}
+
+var metricColumns = buildMetricColumns(sensorMetrics)
+
+var latestSnapshotQuery = buildLatestSnapshotQuery(sensorMetrics)
 
 var rangeIntervals = map[string]struct {
 	Lookback string
@@ -105,58 +115,94 @@ func (api *apiServer) handleDeviceLatest(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	row := api.db.QueryRow(r.Context(), `
-		SELECT
-			ts,
-			temperature_c,
-			humidity_percent,
-			battery_percent,
-			rssi_dbm,
-			pressure_hpa,
-			co2_ppm,
-			lux,
-			etvoc,
-			soil_moisture_percent,
-			conductivity_us_cm
-		FROM sensor_minute
-		WHERE mac = $1
-		  AND (
-		    temperature_c IS NOT NULL OR
-		    humidity_percent IS NOT NULL OR
-		    battery_percent IS NOT NULL OR
-		    pressure_hpa IS NOT NULL OR
-		    co2_ppm IS NOT NULL OR
-		    lux IS NOT NULL OR
-		    etvoc IS NOT NULL OR
-		    soil_moisture_percent IS NOT NULL OR
-		    conductivity_us_cm IS NOT NULL
-		  )
-		ORDER BY ts DESC
-		LIMIT 1
-	`, mac)
-
-	var ts time.Time
-	values := map[string]*float64{}
-	var temperature, humidity, battery, rssi, pressure, co2, lux, etvoc, soilMoisture, conductivity pgtype.Float8
-	if err := row.Scan(&ts, &temperature, &humidity, &battery, &rssi, &pressure, &co2, &lux, &etvoc, &soilMoisture, &conductivity); errors.Is(err, pgx.ErrNoRows) {
+	snapshot, err := api.loadLatestSnapshot(r.Context(), mac)
+	if errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, http.StatusNotFound, "sensor value not found")
 		return
 	} else if err != nil {
 		writeError(w, http.StatusInternalServerError, "query latest value")
 		return
 	}
-	values["temperature_c"] = floatPtrFromPg(temperature)
-	values["humidity_percent"] = floatPtrFromPg(humidity)
-	values["battery_percent"] = floatPtrFromPg(battery)
-	values["rssi_dbm"] = floatPtrFromPg(rssi)
-	values["pressure_hpa"] = floatPtrFromPg(pressure)
-	values["co2_ppm"] = floatPtrFromPg(co2)
-	values["lux"] = floatPtrFromPg(lux)
-	values["etvoc"] = floatPtrFromPg(etvoc)
-	values["soil_moisture_percent"] = floatPtrFromPg(soilMoisture)
-	values["conductivity_us_cm"] = floatPtrFromPg(conductivity)
 
-	writeJSON(w, http.StatusOK, latestResponse{Device: device, TS: ts, Values: values})
+	writeJSON(w, http.StatusOK, latestResponse{
+		Device:          device,
+		TS:              snapshot.TS,
+		Values:          snapshot.Values,
+		ValueTimestamps: snapshot.ValueTimestamps,
+	})
+}
+
+type latestSnapshot struct {
+	TS              time.Time
+	Values          map[string]*float64
+	ValueTimestamps map[string]time.Time
+}
+
+func (api *apiServer) loadLatestSnapshot(ctx context.Context, mac string) (latestSnapshot, error) {
+	row := api.db.QueryRow(ctx, latestSnapshotQuery, mac)
+
+	timestamps := make([]pgtype.Timestamptz, len(sensorMetrics))
+	readings := make([]pgtype.Float8, len(sensorMetrics))
+	scanArgs := make([]any, 0, len(sensorMetrics)*2)
+	for i := range sensorMetrics {
+		scanArgs = append(scanArgs, &timestamps[i], &readings[i])
+	}
+	if err := row.Scan(scanArgs...); err != nil {
+		return latestSnapshot{}, err
+	}
+	return assembleLatestSnapshot(sensorMetrics, timestamps, readings)
+}
+
+func assembleLatestSnapshot(metrics []sensorMetric, timestamps []pgtype.Timestamptz, readings []pgtype.Float8) (latestSnapshot, error) {
+	snapshot := latestSnapshot{
+		Values:          make(map[string]*float64, len(metrics)),
+		ValueTimestamps: map[string]time.Time{},
+	}
+	for i, metric := range metrics {
+		snapshot.Values[metric.Key] = floatPtrFromPg(readings[i])
+		if timestamps[i].Valid {
+			ts := timestamps[i].Time
+			snapshot.ValueTimestamps[metric.Key] = ts
+			if snapshot.TS.IsZero() || ts.After(snapshot.TS) {
+				snapshot.TS = ts
+			}
+		}
+	}
+	if snapshot.TS.IsZero() {
+		return latestSnapshot{}, pgx.ErrNoRows
+	}
+	return snapshot, nil
+}
+
+func buildMetricColumns(metrics []sensorMetric) map[string]string {
+	columns := make(map[string]string, len(metrics))
+	for _, metric := range metrics {
+		columns[metric.Key] = metric.Column
+	}
+	return columns
+}
+
+func buildLatestSnapshotQuery(metrics []sensorMetric) string {
+	var b strings.Builder
+	b.WriteString("SELECT\n")
+	for i := range metrics {
+		if i > 0 {
+			b.WriteString(",\n")
+		}
+		alias := fmt.Sprintf("m%d", i)
+		b.WriteString(fmt.Sprintf("\t%s.ts, %s.value", alias, alias))
+	}
+	b.WriteString("\nFROM (SELECT 1) base\n")
+	for i, metric := range metrics {
+		alias := fmt.Sprintf("m%d", i)
+		b.WriteString(fmt.Sprintf(
+			"LEFT JOIN LATERAL (SELECT ts, %s AS value FROM sensor_minute WHERE mac = $1 AND %s IS NOT NULL ORDER BY ts DESC LIMIT 1) %s ON true\n",
+			metric.Column,
+			metric.Column,
+			alias,
+		))
+	}
+	return b.String()
 }
 
 func (api *apiServer) handleDeviceSeries(w http.ResponseWriter, r *http.Request) {

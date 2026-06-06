@@ -165,6 +165,13 @@
       return value === null || value === undefined ? '-' : Number(value).toFixed(digits);
     }
 
+    function metricCell(values, valueTimestamps, metric, digits = 1) {
+      const rendered = number(values?.[metric], digits);
+      const ts = valueTimestamps?.[metric];
+      const title = ts ? ` title="${escapeHTML(`${metric} latest: ${ts}`)}"` : '';
+      return `<span${title}>${escapeHTML(rendered)}</span>`;
+    }
+
     function escapeHTML(value) {
       return String(value ?? '').replace(/[&<>"']/g, char => ({
         '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
@@ -238,7 +245,8 @@
         }));
         document.querySelector('#devices').innerHTML = latest.map(({ device, latest }) => {
           const values = latest?.values || {};
-          return `<tr><td><button class="link-button" data-mac="${escapeHTML(device.mac)}">${escapeHTML(device.mac)}</button></td><td>${escapeHTML(device.label)}</td><td>${escapeHTML(cell(device.sensor_category))}</td><td>${escapeHTML(cell(latest?.ts))}</td><td>${number(values.temperature_c)}</td><td>${number(values.humidity_percent)}</td><td>${number(values.soil_moisture_percent, 0)}</td><td>${number(values.conductivity_us_cm, 0)}</td><td>${number(values.battery_percent, 0)}</td><td>${number(values.lux, 0)}</td><td>${number(values.co2_ppm, 0)}</td></tr>`;
+          const valueTimestamps = latest?.value_timestamps || {};
+          return `<tr><td><button class="link-button" data-mac="${escapeHTML(device.mac)}">${escapeHTML(device.mac)}</button></td><td>${escapeHTML(device.label)}</td><td>${escapeHTML(cell(device.sensor_category))}</td><td>${escapeHTML(cell(latest?.ts))}</td><td>${metricCell(values, valueTimestamps, 'temperature_c')}</td><td>${metricCell(values, valueTimestamps, 'humidity_percent')}</td><td>${metricCell(values, valueTimestamps, 'soil_moisture_percent', 0)}</td><td>${metricCell(values, valueTimestamps, 'conductivity_us_cm', 0)}</td><td>${metricCell(values, valueTimestamps, 'battery_percent', 0)}</td><td>${metricCell(values, valueTimestamps, 'lux', 0)}</td><td>${metricCell(values, valueTimestamps, 'co2_ppm', 0)}</td></tr>`;
         }).join('');
         if (!selectedDevice && latest.length) {
           await selectDevice(latest[0].device);

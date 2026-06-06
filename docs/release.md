@@ -108,3 +108,9 @@ Flower Care battery can be polled through Cisco Sensor Connect GATT control when
 connecting, stores only `battery_percent`, and disconnects immediately after the
 read. Flower Care real-time GATT reads, history reads, and firmware storage are
 not part of the operational model.
+`/api/devices/{mac}/latest` now builds a metric-level latest snapshot: `values`
+contains the latest non-null value for each metric, and `value_timestamps`
+records the measurement timestamp for metrics that have a value. This keeps
+sparse GATT battery readings visible without copying old values into later
+`sensor_minute` rows. `/api/devices/{mac}/series` remains based on original
+measurement timestamps.

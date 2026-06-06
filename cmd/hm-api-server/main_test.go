@@ -6,6 +6,10 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 func TestParseAllowedOrigins(t *testing.T) {
@@ -22,7 +26,21 @@ func TestParseAllowedOrigins(t *testing.T) {
 }
 
 func TestMetricColumns(t *testing.T) {
-	for _, metric := range []string{
+	if len(metricColumns) != len(sensorMetrics) {
+		t.Fatalf("metricColumns length = %d, want %d", len(metricColumns), len(sensorMetrics))
+	}
+	for _, metric := range sensorMetrics {
+		if metricColumns[metric.Key] != metric.Column {
+			t.Fatalf("metricColumns[%q] = %q, want %q", metric.Key, metricColumns[metric.Key], metric.Column)
+		}
+	}
+	if _, ok := metricColumns["raw_payload"]; ok {
+		t.Fatal("raw_payload must not be an API metric")
+	}
+}
+
+func TestSensorMetricsIncludeExpectedMetrics(t *testing.T) {
+	for _, key := range []string{
 		"temperature_c",
 		"humidity_percent",
 		"battery_percent",
@@ -34,12 +52,89 @@ func TestMetricColumns(t *testing.T) {
 		"soil_moisture_percent",
 		"conductivity_us_cm",
 	} {
-		if metricColumns[metric] != metric {
-			t.Fatalf("metricColumns[%q] = %q, want %q", metric, metricColumns[metric], metric)
+		if metricColumns[key] != key {
+			t.Fatalf("metricColumns[%q] = %q, want %q", key, metricColumns[key], key)
 		}
 	}
-	if _, ok := metricColumns["raw_payload"]; ok {
-		t.Fatal("raw_payload must not be an API metric")
+}
+
+func TestAssembleLatestSnapshotMergesSparseMetricRows(t *testing.T) {
+	now := time.Date(2026, 6, 6, 22, 35, 0, 0, time.UTC)
+	batteryTS := now.Add(-3 * time.Minute)
+	timestamps := make([]pgtype.Timestamptz, len(sensorMetrics))
+	readings := make([]pgtype.Float8, len(sensorMetrics))
+
+	for i, metric := range sensorMetrics {
+		switch metric.Key {
+		case "temperature_c":
+			timestamps[i] = pgtype.Timestamptz{Time: now, Valid: true}
+			readings[i] = pgtype.Float8{Float64: 22.4, Valid: true}
+		case "battery_percent":
+			timestamps[i] = pgtype.Timestamptz{Time: batteryTS, Valid: true}
+			readings[i] = pgtype.Float8{Float64: 100, Valid: true}
+		}
+	}
+
+	snapshot, err := assembleLatestSnapshot(sensorMetrics, timestamps, readings)
+	if err != nil {
+		t.Fatalf("assemble snapshot: %v", err)
+	}
+	if !snapshot.TS.Equal(now) {
+		t.Fatalf("snapshot TS = %s, want %s", snapshot.TS, now)
+	}
+	if got := snapshot.Values["temperature_c"]; got == nil || *got != 22.4 {
+		t.Fatalf("temperature value = %v, want 22.4", got)
+	}
+	if got := snapshot.Values["battery_percent"]; got == nil || *got != 100 {
+		t.Fatalf("battery value = %v, want 100", got)
+	}
+	if got := snapshot.Values["humidity_percent"]; got != nil {
+		t.Fatalf("humidity value = %v, want nil", *got)
+	}
+	if !snapshot.ValueTimestamps["temperature_c"].Equal(now) {
+		t.Fatalf("temperature timestamp = %s, want %s", snapshot.ValueTimestamps["temperature_c"], now)
+	}
+	if !snapshot.ValueTimestamps["battery_percent"].Equal(batteryTS) {
+		t.Fatalf("battery timestamp = %s, want %s", snapshot.ValueTimestamps["battery_percent"], batteryTS)
+	}
+	if _, ok := snapshot.ValueTimestamps["humidity_percent"]; ok {
+		t.Fatal("value_timestamps must omit metrics with no value")
+	}
+}
+
+func TestAssembleLatestSnapshotReturnsNoRowsWhenAllMetricsAreNull(t *testing.T) {
+	_, err := assembleLatestSnapshot(
+		sensorMetrics,
+		make([]pgtype.Timestamptz, len(sensorMetrics)),
+		make([]pgtype.Float8, len(sensorMetrics)),
+	)
+	if err != pgx.ErrNoRows {
+		t.Fatalf("error = %v, want pgx.ErrNoRows", err)
+	}
+}
+
+func TestLatestResponseKeepsExistingShapeAndAddsValueTimestamps(t *testing.T) {
+	ts := time.Date(2026, 6, 6, 22, 35, 0, 0, time.UTC)
+	batteryTS := ts.Add(-24 * time.Hour)
+	value := 100.0
+	resp := latestResponse{
+		Device: deviceResponse{MAC: "5c:85:7e:14:73:7d", Label: "blue berry 1", Enabled: true},
+		TS:     ts,
+		Values: map[string]*float64{
+			"battery_percent": &value,
+			"temperature_c":   nil,
+		},
+		ValueTimestamps: map[string]time.Time{"battery_percent": batteryTS},
+	}
+	body, err := json.Marshal(resp)
+	if err != nil {
+		t.Fatalf("marshal response: %v", err)
+	}
+	text := string(body)
+	for _, want := range []string{`"device":`, `"ts":`, `"values":`, `"value_timestamps":`, `"battery_percent":100`, `"temperature_c":null`} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("response missing %s: %s", want, text)
+		}
 	}
 }
 

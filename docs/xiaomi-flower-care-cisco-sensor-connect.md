@@ -339,7 +339,15 @@ The current implementation includes:
 5. API and UI exposure.
    - `/api/devices/{mac}/latest` and `/api/devices/{mac}/series` expose
      `soil_moisture_percent` and `conductivity_us_cm`.
-   - The latest query can select rows containing only plant metrics.
+   - The latest API is a metric-level snapshot. It keeps the existing
+     `device`, `ts`, and `values` response shape, but each value is the latest
+     non-null value for that specific metric.
+   - `value_timestamps` records the measurement time for each metric that has a
+     value. This lets clients display low-frequency GATT battery readings
+     without copying battery into every minute row.
+   - The top-level `ts` is the newest timestamp across the metric values.
+   - `/api/devices/{mac}/series` remains based on the original measurement
+     timestamps.
    - `docs/openapi.yaml`, `docs/api.md`, and the web UI list the new metrics.
    - The user-facing label is `Conductivity`; the storage/API name is
      `conductivity_us_cm`.
@@ -361,6 +369,9 @@ The current implementation includes:
    - The collector connects to service `1204`, reads characteristic
      `00001a02-0000-1000-8000-00805f9b34fb`, stores byte `0` as
      `battery_percent`, logs the firmware string, and disconnects.
+   - Battery readings are intentionally sparse. The API latest snapshot exposes
+     the latest battery value with its own timestamp; the collector does not
+     write copied battery values into later advertisement rows.
    - GATT polling failures are logged but do not mark the MQTT collector as
      unhealthy, because this is auxiliary telemetry.
 

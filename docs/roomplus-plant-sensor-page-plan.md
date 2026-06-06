@@ -150,7 +150,7 @@ Example `/api/devices/{mac}/latest` response for a plant sensor:
   "values": {
     "temperature_c": 23.4,
     "humidity_percent": null,
-    "battery_percent": null,
+    "battery_percent": 100,
     "rssi_dbm": null,
     "pressure_hpa": null,
     "co2_ppm": null,
@@ -158,6 +158,13 @@ Example `/api/devices/{mac}/latest` response for a plant sensor:
     "etvoc": null,
     "soil_moisture_percent": 28,
     "conductivity_us_cm": 208
+  },
+  "value_timestamps": {
+    "temperature_c": "2026-06-06T12:34:00Z",
+    "battery_percent": "2026-06-05T12:42:00Z",
+    "lux": "2026-06-06T12:34:00Z",
+    "soil_moisture_percent": "2026-06-06T12:34:00Z",
+    "conductivity_us_cm": "2026-06-06T12:34:00Z"
   }
 }
 ```
@@ -168,12 +175,19 @@ explicit location is configured, so a Flower Care device may also return
 `"location": "blue berry 1"`. RoomPlus should decode it as optional and avoid
 using it for plant classification. The `values` object includes all known
 sensor metric keys; unavailable metrics are returned as `null`.
+`value_timestamps` contains only metrics that have a non-null value and records
+when each metric was measured. The top-level `ts` is the newest timestamp across
+the metric values and remains the device's latest telemetry time.
 
 For Xiaomi Flower Care sensors, `battery_percent` is optional. Passive
 advertisements do not provide it, but `home-metrics` can poll the Flower Care
 GATT battery characteristic at a low frequency when `gatt_battery` is configured
-for that device. RoomPlus should display the battery value when present and
-omit or de-emphasize it when it is `null`.
+for that device. `/api/devices/{mac}/latest` exposes the latest non-null value
+per metric, so RoomPlus can display battery even when it is older than the
+latest soil, temperature, or lux advertisement. RoomPlus can use
+`value_timestamps.battery_percent` to de-emphasize a stale battery value when
+needed. `/api/devices/{mac}/series` remains based on the original measurement
+timestamps and does not copy battery values forward.
 
 ## Page Split
 

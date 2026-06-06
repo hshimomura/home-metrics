@@ -54,7 +54,18 @@ Returns configured sensor devices.
 
 ### GET /api/devices/{mac}/latest
 
-Returns the latest aggregated sensor values for one device from `sensor_minute`.
+Returns the latest sensor snapshot for one device from `sensor_minute`.
+The response keeps the existing `device`, `ts`, and `values` shape. `values`
+contains the latest non-null value for each supported metric, so sparse metrics
+such as Flower Care `battery_percent` can be shown even when they are measured
+less frequently than advertisement metrics. Metrics with no stored value are
+returned as `null`.
+
+`value_timestamps` is an optional object keyed by metric name. It contains only
+metrics that have a value and records the timestamp of that metric's latest
+measurement. The top-level `ts` is the maximum timestamp across
+`value_timestamps`, representing the device's latest telemetry time. The API
+returns `404` when no metric has any value for the device.
 
 ### GET /api/devices/{mac}/series
 
@@ -64,6 +75,9 @@ Query parameters:
   `rssi_dbm`, `pressure_hpa`, `co2_ppm`, `lux`, `etvoc`,
   `soil_moisture_percent`, `conductivity_us_cm`.
 - `range`: one of `1d`, `1w`, `1m`, `3m`, `1y`. Defaults to `1d`.
+
+Series responses remain based on the original measurement timestamps and do not
+copy sparse latest values forward.
 
 ## Energy
 

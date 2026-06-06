@@ -213,6 +213,12 @@ components:
             type:
               - number
               - "null"
+        value_timestamps:
+          type: object
+          description: Measurement timestamp for each metric that has a non-null value.
+          additionalProperties:
+            type: string
+            format: date-time
     SeriesPoint:
       type: object
       required: [ts, value]
