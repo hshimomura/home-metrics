@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 )
@@ -205,6 +206,36 @@ func TestCollectorFlushCompletedKeepsWindowOnFailure(t *testing.T) {
 	count, oldest := c.pendingSummary(window.Add(3 * time.Minute))
 	if count != 1 || oldest != 3*time.Minute {
 		t.Fatalf("pendingSummary=(%d,%s), want (1,3m0s)", count, oldest)
+	}
+}
+
+func TestReadMQTTPacketRejectsOversizedPayload(t *testing.T) {
+	var packet bytes.Buffer
+	packet.WriteByte(0x30)
+	writeRemainingLength(&packet, 5)
+	packet.Write([]byte("hello"))
+
+	_, _, err := readMQTTPacket(&packet, 4)
+	if err == nil {
+		t.Fatal("readMQTTPacket error = nil, want oversized packet error")
+	}
+	if !strings.Contains(err.Error(), "MQTT packet too large") {
+		t.Fatalf("readMQTTPacket error = %v, want MQTT packet too large", err)
+	}
+}
+
+func TestReadMQTTPacketAcceptsPayloadAtLimit(t *testing.T) {
+	var packet bytes.Buffer
+	packet.WriteByte(0x30)
+	writeRemainingLength(&packet, 5)
+	packet.Write([]byte("hello"))
+
+	packetType, payload, err := readMQTTPacket(&packet, 5)
+	if err != nil {
+		t.Fatalf("readMQTTPacket: %v", err)
+	}
+	if packetType != 3 || string(payload) != "hello" {
+		t.Fatalf("packet=(%d,%q), want (3,hello)", packetType, string(payload))
 	}
 }
 

@@ -43,6 +43,7 @@ const (
 	defaultStreamHeartbeat   = time.Minute
 	defaultAggregateFlush    = 10 * time.Second
 	defaultPendingLog        = 5 * time.Minute
+	defaultMQTTMaxPacket     = 1 << 20
 )
 
 type config struct {
@@ -65,6 +66,7 @@ type config struct {
 	StreamHeartbeat   time.Duration
 	AggregateFlush    time.Duration
 	PendingLog        time.Duration
+	MQTTMaxPacket     int
 }
 
 type targetDevice struct {
@@ -302,6 +304,7 @@ func loadConfig() config {
 		DBDSN:             envString("BLE_DB_DSN", defaultDBDSN),
 		APIURL:            envString("CISCO_IOT_ORCH_API_URL", defaultAPIURL),
 		MQTTAddr:          envString("CISCO_IOT_ORCH_MQTT_ADDR", defaultMQTTAddr),
+		MQTTMaxPacket:     envInt("CISCO_IOT_ORCH_MQTT_MAX_PACKET_BYTES", defaultMQTTMaxPacket),
 		OnboardAppID:      envString("CISCO_IOT_ORCH_ONBOARD_APP_ID", defaultOnboardAppID),
 		OnboardAPIKey:     envString("CISCO_IOT_ORCH_ONBOARD_API_KEY", ""),
 		ControlAppID:      envString("CISCO_IOT_ORCH_CONTROL_APP_ID", defaultControlAppID),
@@ -603,10 +606,10 @@ func runMQTT(ctx context.Context, cfg config, onMessage func(topic string, paylo
 	}
 	defer conn.Close()
 	clientID := "home-metrics-" + randomHex(4)
-	if err := mqttConnect(conn, clientID, cfg.DataAppID, cfg.DataAPIKey); err != nil {
+	if err := mqttConnect(conn, clientID, cfg.DataAppID, cfg.DataAPIKey, cfg.MQTTMaxPacket); err != nil {
 		return err
 	}
-	if err := mqttSubscribe(conn, 1, cfg.Topic); err != nil {
+	if err := mqttSubscribe(conn, 1, cfg.Topic, cfg.MQTTMaxPacket); err != nil {
 		return err
 	}
 	heartbeat := time.NewTicker(cfg.StreamHeartbeat)
@@ -633,7 +636,7 @@ func runMQTT(ctx context.Context, cfg config, onMessage func(topic string, paylo
 		default:
 		}
 		_ = conn.SetReadDeadline(time.Now().Add(time.Second))
-		packetType, payload, err := readMQTTPacket(conn)
+		packetType, payload, err := readMQTTPacket(conn, cfg.MQTTMaxPacket)
 		if err != nil {
 			if ne, ok := err.(net.Error); ok && ne.Timeout() {
 				continue
@@ -650,7 +653,7 @@ func runMQTT(ctx context.Context, cfg config, onMessage func(topic string, paylo
 	}
 }
 
-func mqttConnect(conn net.Conn, clientID string, username string, password string) error {
+func mqttConnect(conn net.Conn, clientID string, username string, password string, maxPacket int) error {
 	var variable bytes.Buffer
 	writeMQTTString(&variable, "MQTT")
 	variable.WriteByte(4)
@@ -662,7 +665,7 @@ func mqttConnect(conn net.Conn, clientID string, username string, password strin
 	if err := writeMQTTPacket(conn, 0x10, variable.Bytes()); err != nil {
 		return err
 	}
-	packetType, payload, err := readMQTTPacket(conn)
+	packetType, payload, err := readMQTTPacket(conn, maxPacket)
 	if err != nil {
 		return err
 	}
@@ -675,7 +678,7 @@ func mqttConnect(conn net.Conn, clientID string, username string, password strin
 	return nil
 }
 
-func mqttSubscribe(conn net.Conn, packetID uint16, topic string) error {
+func mqttSubscribe(conn net.Conn, packetID uint16, topic string, maxPacket int) error {
 	var payload bytes.Buffer
 	_ = binary.Write(&payload, binary.BigEndian, packetID)
 	writeMQTTString(&payload, topic)
@@ -683,7 +686,7 @@ func mqttSubscribe(conn net.Conn, packetID uint16, topic string) error {
 	if err := writeMQTTPacket(conn, 0x82, payload.Bytes()); err != nil {
 		return err
 	}
-	packetType, body, err := readMQTTPacket(conn)
+	packetType, body, err := readMQTTPacket(conn, maxPacket)
 	if err != nil {
 		return err
 	}
@@ -716,7 +719,7 @@ func writeMQTTPacket(conn net.Conn, header byte, payload []byte) error {
 	return err
 }
 
-func readMQTTPacket(conn net.Conn) (int, []byte, error) {
+func readMQTTPacket(conn io.Reader, maxPacket int) (int, []byte, error) {
 	header := make([]byte, 1)
 	if _, err := io.ReadFull(conn, header); err != nil {
 		return 0, nil, err
@@ -724,6 +727,12 @@ func readMQTTPacket(conn net.Conn) (int, []byte, error) {
 	length, err := readRemainingLength(conn)
 	if err != nil {
 		return 0, nil, err
+	}
+	if maxPacket <= 0 {
+		maxPacket = defaultMQTTMaxPacket
+	}
+	if length > maxPacket {
+		return 0, nil, fmt.Errorf("MQTT packet too large: %d bytes exceeds %d", length, maxPacket)
 	}
 	payload := make([]byte, length)
 	if _, err := io.ReadFull(conn, payload); err != nil {
