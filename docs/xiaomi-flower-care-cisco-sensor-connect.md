@@ -248,7 +248,7 @@ conductivity_us_cm double precision
 
 The DB/API metric name is `conductivity_us_cm`. The Flower Care mobile
 application exposes this value as fertility, but the underlying physical value
-is conductivity measured in `uS/cm`. Use `Fertility` as the user-facing label
+is conductivity measured in `uS/cm`. Use `Conductivity` as the user-facing label
 and `conductivity_us_cm` as the storage/API field.
 
 Use the existing `sensor_minute` table rather than creating a separate plant
@@ -321,7 +321,7 @@ Implement support in small, reviewable steps:
      reading.
    - Update `docs/openapi.yaml` and `docs/api.md`.
    - Update the web UI metric list. Suggested labels:
-     `Soil moisture` with unit `%`, and `Fertility` with unit `uS/cm`.
+     `Soil moisture` with unit `%`, and `Conductivity` with unit `uS/cm`.
    - Keep `humidity_percent` displayed as air humidity.
 
 6. Register Flower Care devices as configured targets.

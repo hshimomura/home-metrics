@@ -38,7 +38,7 @@ var sensorFields = []sensorField{
 	{Name: "Lux", Column: "lux", Unit: "lux"},
 	{Name: "eTVOC", Column: "etvoc", Unit: ""},
 	{Name: "Soil moisture", Column: "soil_moisture_percent", Unit: "%"},
-	{Name: "Fertility", Column: "conductivity_us_cm", Unit: "uS/cm"},
+	{Name: "Conductivity", Column: "conductivity_us_cm", Unit: "uS/cm"},
 }
 
 func main() {
