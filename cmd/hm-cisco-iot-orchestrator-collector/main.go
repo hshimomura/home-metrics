@@ -1579,7 +1579,7 @@ func upsertDevice(ctx context.Context, db *pgx.Conn, mac string, label string, d
 		ON CONFLICT (mac) DO UPDATE SET
 			label = EXCLUDED.label,
 			sensor_category = CASE
-				WHEN devices.sensor_category IS NULL OR devices.sensor_category = '' OR devices.sensor_category IN ('Cisco IoT Orchestrator', 'Cisco Spaces')
+				WHEN devices.sensor_category IS NULL OR devices.sensor_category = '' OR devices.sensor_category IN ('Cisco IoT Orchestrator', 'Cisco Spaces', 'Cisco Sensor Connect (IoT Orchestrator)')
 				THEN EXCLUDED.sensor_category
 				ELSE devices.sensor_category
 			END,

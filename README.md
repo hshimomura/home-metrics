@@ -72,6 +72,9 @@ Migration `0013_add_sensor_type_metadata.sql` adds `sensor_types` and the
 `devices.ingest_source`, `devices.sensor_type_code`, and
 `devices.sensor_category` metadata fields. `sensor_category` remains as a legacy
 display field for existing clients.
+Migration `0014_rename_blueberry_sensor.sql` renames the first Flower Care
+device to `Blueberry1` and replaces the old plant-specific `sensor_category` value
+with the generic Cisco Sensor Connect display value.
 
 ## Configuration
 
