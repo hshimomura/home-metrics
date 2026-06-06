@@ -204,15 +204,21 @@ func TestCollectorAggregatesSparseFlowerCareAdvertisements(t *testing.T) {
 	c.add(bleReading{
 		TS:                  window.Add(5 * time.Second),
 		SensorMAC:           "5c:85:7e:14:73:7d",
-		Label:               "blue berry 1",
-		SensorCategory:          "Cisco Sensor Connect (IoT Orchestrator)",
+		Label:               "Blueberry1",
+		SensorCategory:          sensorConnectSensorCategory,
+		IngestSource:        sensorConnectIngestSource,
+		SensorTypeCode:      "xiaomi_flower_care",
+		SensorCategory:      "plant",
 		SoilMoisturePercent: floatPtr(11),
 	})
 	c.add(bleReading{
 		TS:               window.Add(15 * time.Second),
 		SensorMAC:        "5c:85:7e:14:73:7d",
-		Label:            "blue berry 1",
-		SensorCategory:       "Cisco Sensor Connect (IoT Orchestrator)",
+		Label:            "Blueberry1",
+		SensorCategory:       sensorConnectSensorCategory,
+		IngestSource:     sensorConnectIngestSource,
+		SensorTypeCode:   "xiaomi_flower_care",
+		SensorCategory:   "plant",
 		ConductivityUSCM: floatPtr(65),
 	})
 
@@ -220,8 +226,17 @@ func TestCollectorAggregatesSparseFlowerCareAdvertisements(t *testing.T) {
 	if agg == nil {
 		t.Fatal("aggregate not found")
 	}
-	if agg.SensorCategory != "Cisco Sensor Connect (IoT Orchestrator)" {
-		t.Fatalf("device type=%q, want plant type", agg.SensorCategory)
+	if agg.SensorCategory != sensorConnectSensorCategory {
+		t.Fatalf("device type=%q, want %q", agg.SensorCategory, sensorConnectSensorCategory)
+	}
+	if agg.IngestSource != sensorConnectIngestSource {
+		t.Fatalf("ingest source=%q, want %q", agg.IngestSource, sensorConnectIngestSource)
+	}
+	if agg.SensorTypeCode != "xiaomi_flower_care" {
+		t.Fatalf("sensor type code=%q, want xiaomi_flower_care", agg.SensorTypeCode)
+	}
+	if agg.SensorCategory != "plant" {
+		t.Fatalf("sensor category=%q, want plant", agg.SensorCategory)
 	}
 	if got := nullableMedianFloat(agg.SoilMoisturePercent); got == nil || *got != 11 {
 		t.Fatalf("soil moisture median=%v, want 11", got)
@@ -231,6 +246,18 @@ func TestCollectorAggregatesSparseFlowerCareAdvertisements(t *testing.T) {
 	}
 	if len(agg.HumidityPercent) != 0 {
 		t.Fatalf("humidity samples=%v, want none", agg.HumidityPercent)
+	}
+}
+
+func TestNormalizeSensorMetadataDefaultsFlowerCareCategory(t *testing.T) {
+	if got := normalizeIngestSource(""); got != sensorConnectIngestSource {
+		t.Fatalf("ingest source=%q, want %q", got, sensorConnectIngestSource)
+	}
+	if got := normalizeSensorCategory("", "xiaomi_flower_care"); got != "plant" {
+		t.Fatalf("sensor category=%q, want plant", got)
+	}
+	if got := normalizeSensorCategory("custom", "xiaomi_flower_care"); got != "custom" {
+		t.Fatalf("explicit sensor category=%q, want custom", got)
 	}
 }
 

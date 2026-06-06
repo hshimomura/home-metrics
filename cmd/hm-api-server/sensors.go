@@ -14,11 +14,23 @@ import (
 )
 
 type deviceResponse struct {
-	MAC        string `json:"mac"`
-	Label      string `json:"label"`
-	SensorCategory string `json:"sensor_category,omitempty"`
-	Location   string `json:"location,omitempty"`
-	Enabled    bool   `json:"enabled"`
+	MAC            string              `json:"mac"`
+	Label          string              `json:"label"`
+	SensorCategory     string              `json:"sensor_category,omitempty"`
+	Location       string              `json:"location,omitempty"`
+	Enabled        bool                `json:"enabled"`
+	IngestSource   string              `json:"ingest_source,omitempty"`
+	SensorTypeCode string              `json:"sensor_type_code,omitempty"`
+	SensorType     *sensorTypeResponse `json:"sensor_type,omitempty"`
+	SensorCategory string              `json:"sensor_category,omitempty"`
+}
+
+type sensorTypeResponse struct {
+	Code        string `json:"code"`
+	DisplayName string `json:"display_name"`
+	Category    string `json:"category"`
+	Vendor      string `json:"vendor,omitempty"`
+	Model       string `json:"model,omitempty"`
 }
 
 type latestResponse struct {
@@ -70,13 +82,22 @@ var rangeIntervals = map[string]struct {
 func (api *apiServer) handleDevices(w http.ResponseWriter, r *http.Request) {
 	rows, err := api.db.Query(r.Context(), `
 		SELECT
-			mac,
-			label,
-			COALESCE(sensor_category, ''),
-			COALESCE(location, ''),
-			enabled
-		FROM devices
-		ORDER BY mac
+			d.mac,
+			d.label,
+			COALESCE(d.sensor_category, ''),
+			COALESCE(d.location, ''),
+			d.enabled,
+			COALESCE(d.ingest_source, ''),
+			COALESCE(d.sensor_type_code, ''),
+			COALESCE(d.sensor_category, ''),
+			COALESCE(st.code, ''),
+			COALESCE(st.display_name, ''),
+			COALESCE(st.category, ''),
+			COALESCE(st.vendor, ''),
+			COALESCE(st.model, '')
+		FROM devices d
+		LEFT JOIN sensor_types st ON st.code = d.sensor_type_code
+		ORDER BY d.mac
 	`)
 	if err != nil {
 		log.Printf("query devices: %v", err)
@@ -88,7 +109,7 @@ func (api *apiServer) handleDevices(w http.ResponseWriter, r *http.Request) {
 	devices := []deviceResponse{}
 	for rows.Next() {
 		var d deviceResponse
-		if err := rows.Scan(&d.MAC, &d.Label, &d.SensorCategory, &d.Location, &d.Enabled); err != nil {
+		if err := scanDeviceResponse(rows, &d); err != nil {
 			log.Printf("scan devices: %v", err)
 			writeError(w, http.StatusInternalServerError, "scan devices")
 			return
@@ -263,17 +284,29 @@ func (api *apiServer) handleDeviceSeries(w http.ResponseWriter, r *http.Request)
 
 func (api *apiServer) loadDevice(ctx context.Context, mac string) (deviceResponse, error) {
 	var d deviceResponse
-	err := api.db.QueryRow(ctx, `
+	row := api.db.QueryRow(ctx, `
 		SELECT
-			mac,
-			label,
-			COALESCE(sensor_category, ''),
-			COALESCE(location, ''),
-			enabled
-		FROM devices
-		WHERE mac = $1
-	`, mac).Scan(&d.MAC, &d.Label, &d.SensorCategory, &d.Location, &d.Enabled)
-	return d, err
+			d.mac,
+			d.label,
+			COALESCE(d.sensor_category, ''),
+			COALESCE(d.location, ''),
+			d.enabled,
+			COALESCE(d.ingest_source, ''),
+			COALESCE(d.sensor_type_code, ''),
+			COALESCE(d.sensor_category, ''),
+			COALESCE(st.code, ''),
+			COALESCE(st.display_name, ''),
+			COALESCE(st.category, ''),
+			COALESCE(st.vendor, ''),
+			COALESCE(st.model, '')
+		FROM devices d
+		LEFT JOIN sensor_types st ON st.code = d.sensor_type_code
+		WHERE d.mac = $1
+	`, mac)
+	if err := scanDeviceResponse(row, &d); err != nil {
+		return deviceResponse{}, err
+	}
+	return d, nil
 }
 
 func floatPtrFromPg(value pgtype.Float8) *float64 {
@@ -281,4 +314,33 @@ func floatPtrFromPg(value pgtype.Float8) *float64 {
 		return nil
 	}
 	return &value.Float64
+}
+
+type deviceScanner interface {
+	Scan(dest ...any) error
+}
+
+func scanDeviceResponse(row deviceScanner, d *deviceResponse) error {
+	var st sensorTypeResponse
+	if err := row.Scan(
+		&d.MAC,
+		&d.Label,
+		&d.SensorCategory,
+		&d.Location,
+		&d.Enabled,
+		&d.IngestSource,
+		&d.SensorTypeCode,
+		&d.SensorCategory,
+		&st.Code,
+		&st.DisplayName,
+		&st.Category,
+		&st.Vendor,
+		&st.Model,
+	); err != nil {
+		return err
+	}
+	if st.Code != "" {
+		d.SensorType = &st
+	}
+	return nil
 }

@@ -194,10 +194,36 @@ components:
           type: string
         sensor_category:
           type: string
+          description: Legacy display field. New clients should use ingest_source, sensor_type_code, and sensor_category.
         location:
           type: string
         enabled:
           type: boolean
+        ingest_source:
+          type: string
+          description: Telemetry ingest path, such as cisco_sensor_connect.
+        sensor_type_code:
+          type: string
+          description: Stable sensor model/decoder code.
+        sensor_type:
+          $ref: "#/components/schemas/SensorType"
+        sensor_category:
+          type: string
+          description: Client-facing category, such as plant or environment.
+    SensorType:
+      type: object
+      required: [code, display_name, category]
+      properties:
+        code:
+          type: string
+        display_name:
+          type: string
+        category:
+          type: string
+        vendor:
+          type: string
+        model:
+          type: string
     LatestSensor:
       type: object
       required: [device, ts, values]

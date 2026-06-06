@@ -42,7 +42,7 @@
                         "editorMode": "code",
                         "format": "time_series",
                         "rawQuery": true,
-                        "rawSql": "WITH latest AS (\n  SELECT DISTINCT ON (d.mac)\n    d.label,\n    sm.ts,\n    sm.soil_moisture_percent\n  FROM sensor_minute sm\n  JOIN devices d ON d.mac = sm.mac\n  WHERE $__timeFilter(sm.ts)\n    AND d.sensor_category = 'Cisco Sensor Connect (IoT Orchestrator)'\n    AND sm.soil_moisture_percent IS NOT NULL\n  ORDER BY d.mac, sm.ts DESC\n)\nSELECT\n  ts AS \"time\",\n  label AS metric,\n  soil_moisture_percent AS value\nFROM latest\nORDER BY label"
+                        "rawSql": "WITH latest AS (\n  SELECT DISTINCT ON (d.mac)\n    d.label,\n    sm.ts,\n    sm.soil_moisture_percent\n  FROM sensor_minute sm\n  JOIN devices d ON d.mac = sm.mac\n  WHERE $__timeFilter(sm.ts)\n    AND d.sensor_category = 'plant'\n    AND sm.soil_moisture_percent IS NOT NULL\n  ORDER BY d.mac, sm.ts DESC\n)\nSELECT\n  ts AS \"time\",\n  label AS metric,\n  soil_moisture_percent AS value\nFROM latest\nORDER BY label"
                       },
                       "version": "v0"
                     },
@@ -136,7 +136,7 @@
                         "editorMode": "code",
                         "format": "time_series",
                         "rawQuery": true,
-                        "rawSql": "WITH latest AS (\n  SELECT DISTINCT ON (d.mac)\n    d.label,\n    sm.ts,\n    sm.conductivity_us_cm\n  FROM sensor_minute sm\n  JOIN devices d ON d.mac = sm.mac\n  WHERE $__timeFilter(sm.ts)\n    AND d.sensor_category = 'Cisco Sensor Connect (IoT Orchestrator)'\n    AND sm.conductivity_us_cm IS NOT NULL\n  ORDER BY d.mac, sm.ts DESC\n)\nSELECT\n  ts AS \"time\",\n  label AS metric,\n  conductivity_us_cm AS value\nFROM latest\nORDER BY label"
+                        "rawSql": "WITH latest AS (\n  SELECT DISTINCT ON (d.mac)\n    d.label,\n    sm.ts,\n    sm.conductivity_us_cm\n  FROM sensor_minute sm\n  JOIN devices d ON d.mac = sm.mac\n  WHERE $__timeFilter(sm.ts)\n    AND d.sensor_category = 'plant'\n    AND sm.conductivity_us_cm IS NOT NULL\n  ORDER BY d.mac, sm.ts DESC\n)\nSELECT\n  ts AS \"time\",\n  label AS metric,\n  conductivity_us_cm AS value\nFROM latest\nORDER BY label"
                       },
                       "version": "v0"
                     },
@@ -230,7 +230,7 @@
                         "editorMode": "code",
                         "format": "time_series",
                         "rawQuery": true,
-                        "rawSql": "WITH latest AS (\n  SELECT DISTINCT ON (d.mac)\n    d.label,\n    sm.ts,\n    sm.temperature_c\n  FROM sensor_minute sm\n  JOIN devices d ON d.mac = sm.mac\n  WHERE $__timeFilter(sm.ts)\n    AND d.sensor_category = 'Cisco Sensor Connect (IoT Orchestrator)'\n    AND sm.temperature_c IS NOT NULL\n  ORDER BY d.mac, sm.ts DESC\n)\nSELECT\n  ts AS \"time\",\n  label AS metric,\n  temperature_c AS value\nFROM latest\nORDER BY label"
+                        "rawSql": "WITH latest AS (\n  SELECT DISTINCT ON (d.mac)\n    d.label,\n    sm.ts,\n    sm.temperature_c\n  FROM sensor_minute sm\n  JOIN devices d ON d.mac = sm.mac\n  WHERE $__timeFilter(sm.ts)\n    AND d.sensor_category = 'plant'\n    AND sm.temperature_c IS NOT NULL\n  ORDER BY d.mac, sm.ts DESC\n)\nSELECT\n  ts AS \"time\",\n  label AS metric,\n  temperature_c AS value\nFROM latest\nORDER BY label"
                       },
                       "version": "v0"
                     },
@@ -320,7 +320,7 @@
                         "editorMode": "code",
                         "format": "time_series",
                         "rawQuery": true,
-                        "rawSql": "WITH latest AS (\n  SELECT DISTINCT ON (d.mac)\n    d.label,\n    sm.ts,\n    sm.lux\n  FROM sensor_minute sm\n  JOIN devices d ON d.mac = sm.mac\n  WHERE $__timeFilter(sm.ts)\n    AND d.sensor_category = 'Cisco Sensor Connect (IoT Orchestrator)'\n    AND sm.lux IS NOT NULL\n  ORDER BY d.mac, sm.ts DESC\n)\nSELECT\n  ts AS \"time\",\n  label AS metric,\n  lux AS value\nFROM latest\nORDER BY label"
+                        "rawSql": "WITH latest AS (\n  SELECT DISTINCT ON (d.mac)\n    d.label,\n    sm.ts,\n    sm.lux\n  FROM sensor_minute sm\n  JOIN devices d ON d.mac = sm.mac\n  WHERE $__timeFilter(sm.ts)\n    AND d.sensor_category = 'plant'\n    AND sm.lux IS NOT NULL\n  ORDER BY d.mac, sm.ts DESC\n)\nSELECT\n  ts AS \"time\",\n  label AS metric,\n  lux AS value\nFROM latest\nORDER BY label"
                       },
                       "version": "v0"
                     },
@@ -410,7 +410,7 @@
                         "editorMode": "code",
                         "format": "time_series",
                         "rawQuery": true,
-                        "rawSql": "SELECT\n  time_bucket('$__interval'::interval, sm.ts) AS \"time\",\n  d.label AS metric,\n  avg(sm.soil_moisture_percent) AS value\nFROM sensor_minute sm\nJOIN devices d ON d.mac = sm.mac\nWHERE $__timeFilter(sm.ts)\n  AND d.sensor_category = 'Cisco Sensor Connect (IoT Orchestrator)'\n  AND sm.soil_moisture_percent IS NOT NULL\nGROUP BY 1, 2\nORDER BY 1, 2"
+                        "rawSql": "SELECT\n  time_bucket('$__interval'::interval, sm.ts) AS \"time\",\n  d.label AS metric,\n  avg(sm.soil_moisture_percent) AS value\nFROM sensor_minute sm\nJOIN devices d ON d.mac = sm.mac\nWHERE $__timeFilter(sm.ts)\n  AND d.sensor_category = 'plant'\n  AND sm.soil_moisture_percent IS NOT NULL\nGROUP BY 1, 2\nORDER BY 1, 2"
                       },
                       "version": "v0"
                     },
@@ -541,7 +541,7 @@
                         "editorMode": "code",
                         "format": "time_series",
                         "rawQuery": true,
-                        "rawSql": "SELECT\n  time_bucket('$__interval'::interval, sm.ts) AS \"time\",\n  d.label AS metric,\n  avg(sm.conductivity_us_cm) AS value\nFROM sensor_minute sm\nJOIN devices d ON d.mac = sm.mac\nWHERE $__timeFilter(sm.ts)\n  AND d.sensor_category = 'Cisco Sensor Connect (IoT Orchestrator)'\n  AND sm.conductivity_us_cm IS NOT NULL\nGROUP BY 1, 2\nORDER BY 1, 2"
+                        "rawSql": "SELECT\n  time_bucket('$__interval'::interval, sm.ts) AS \"time\",\n  d.label AS metric,\n  avg(sm.conductivity_us_cm) AS value\nFROM sensor_minute sm\nJOIN devices d ON d.mac = sm.mac\nWHERE $__timeFilter(sm.ts)\n  AND d.sensor_category = 'plant'\n  AND sm.conductivity_us_cm IS NOT NULL\nGROUP BY 1, 2\nORDER BY 1, 2"
                       },
                       "version": "v0"
                     },
@@ -672,7 +672,7 @@
                         "editorMode": "code",
                         "format": "time_series",
                         "rawQuery": true,
-                        "rawSql": "SELECT\n  time_bucket('$__interval'::interval, sm.ts) AS \"time\",\n  d.label AS metric,\n  avg(sm.temperature_c) AS value\nFROM sensor_minute sm\nJOIN devices d ON d.mac = sm.mac\nWHERE $__timeFilter(sm.ts)\n  AND d.sensor_category = 'Cisco Sensor Connect (IoT Orchestrator)'\n  AND sm.temperature_c IS NOT NULL\nGROUP BY 1, 2\nORDER BY 1, 2"
+                        "rawSql": "SELECT\n  time_bucket('$__interval'::interval, sm.ts) AS \"time\",\n  d.label AS metric,\n  avg(sm.temperature_c) AS value\nFROM sensor_minute sm\nJOIN devices d ON d.mac = sm.mac\nWHERE $__timeFilter(sm.ts)\n  AND d.sensor_category = 'plant'\n  AND sm.temperature_c IS NOT NULL\nGROUP BY 1, 2\nORDER BY 1, 2"
                       },
                       "version": "v0"
                     },
@@ -799,7 +799,7 @@
                         "editorMode": "code",
                         "format": "time_series",
                         "rawQuery": true,
-                        "rawSql": "SELECT\n  time_bucket('$__interval'::interval, sm.ts) AS \"time\",\n  d.label AS metric,\n  avg(sm.lux) AS value\nFROM sensor_minute sm\nJOIN devices d ON d.mac = sm.mac\nWHERE $__timeFilter(sm.ts)\n  AND d.sensor_category = 'Cisco Sensor Connect (IoT Orchestrator)'\n  AND sm.lux IS NOT NULL\nGROUP BY 1, 2\nORDER BY 1, 2"
+                        "rawSql": "SELECT\n  time_bucket('$__interval'::interval, sm.ts) AS \"time\",\n  d.label AS metric,\n  avg(sm.lux) AS value\nFROM sensor_minute sm\nJOIN devices d ON d.mac = sm.mac\nWHERE $__timeFilter(sm.ts)\n  AND d.sensor_category = 'plant'\n  AND sm.lux IS NOT NULL\nGROUP BY 1, 2\nORDER BY 1, 2"
                       },
                       "version": "v0"
                     },
@@ -926,7 +926,7 @@
                         "editorMode": "code",
                         "format": "table",
                         "rawQuery": true,
-                        "rawSql": "WITH latest AS (\n  SELECT DISTINCT ON (d.mac)\n    d.label,\n    sm.ts,\n    sm.temperature_c,\n    sm.soil_moisture_percent,\n    sm.conductivity_us_cm,\n    sm.lux\n  FROM sensor_minute sm\n  JOIN devices d ON d.mac = sm.mac\n  WHERE $__timeFilter(sm.ts)\n    AND d.sensor_category = 'Cisco Sensor Connect (IoT Orchestrator)'\n    AND (\n      sm.temperature_c IS NOT NULL OR\n      sm.soil_moisture_percent IS NOT NULL OR\n      sm.conductivity_us_cm IS NOT NULL OR\n      sm.lux IS NOT NULL\n    )\n  ORDER BY d.mac, sm.ts DESC\n)\nSELECT\n  label AS \"Plant\",\n  ts AS \"Last seen\",\n  round(temperature_c::numeric, 1) AS \"Temp C\",\n  round(soil_moisture_percent::numeric, 0) AS \"Soil moisture %\",\n  round(conductivity_us_cm::numeric, 0) AS \"Conductivity uS/cm\",\n  round(lux::numeric, 0) AS \"Lux\"\nFROM latest\nORDER BY label"
+                        "rawSql": "WITH latest AS (\n  SELECT DISTINCT ON (d.mac)\n    d.label,\n    sm.ts,\n    sm.temperature_c,\n    sm.soil_moisture_percent,\n    sm.conductivity_us_cm,\n    sm.lux\n  FROM sensor_minute sm\n  JOIN devices d ON d.mac = sm.mac\n  WHERE $__timeFilter(sm.ts)\n    AND d.sensor_category = 'plant'\n    AND (\n      sm.temperature_c IS NOT NULL OR\n      sm.soil_moisture_percent IS NOT NULL OR\n      sm.conductivity_us_cm IS NOT NULL OR\n      sm.lux IS NOT NULL\n    )\n  ORDER BY d.mac, sm.ts DESC\n)\nSELECT\n  label AS \"Plant\",\n  ts AS \"Last seen\",\n  round(temperature_c::numeric, 1) AS \"Temp C\",\n  round(soil_moisture_percent::numeric, 0) AS \"Soil moisture %\",\n  round(conductivity_us_cm::numeric, 0) AS \"Conductivity uS/cm\",\n  round(lux::numeric, 0) AS \"Lux\"\nFROM latest\nORDER BY label"
                       },
                       "version": "v0"
                     },

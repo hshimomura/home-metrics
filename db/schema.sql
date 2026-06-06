@@ -12,10 +12,53 @@ CREATE TABLE IF NOT EXISTS devices (
     label text NOT NULL,
     sensor_category text,
     location text,
+    ingest_source text,
+    sensor_type_code text,
+    sensor_category text,
     enabled boolean NOT NULL DEFAULT true,
     created_at timestamptz NOT NULL DEFAULT now(),
     updated_at timestamptz NOT NULL DEFAULT now()
 );
+
+CREATE TABLE IF NOT EXISTS sensor_types (
+    code text PRIMARY KEY,
+    display_name text NOT NULL,
+    category text NOT NULL,
+    vendor text,
+    model text,
+    notes text
+);
+
+INSERT INTO sensor_types (code, display_name, category, vendor, model, notes)
+VALUES
+    ('xiaomi_flower_care', 'Xiaomi Flower Care', 'plant', 'Xiaomi / HHCC', 'HHCCJCY01', 'Xiaomi Flower Care / MiFlora BLE plant sensor'),
+    ('minew_s1', 'Minew S1', 'environment', 'Minew', 'S1', 'BLE environmental sensor'),
+    ('env_ble', 'Environmental BLE Sensor', 'environment', NULL, NULL, 'Generic BLE environmental sensor')
+ON CONFLICT (code) DO UPDATE SET
+    display_name = EXCLUDED.display_name,
+    category = EXCLUDED.category,
+    vendor = EXCLUDED.vendor,
+    model = EXCLUDED.model,
+    notes = EXCLUDED.notes;
+
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conname = 'devices_sensor_type_code_fkey'
+    ) THEN
+        ALTER TABLE devices
+            ADD CONSTRAINT devices_sensor_type_code_fkey
+            FOREIGN KEY (sensor_type_code) REFERENCES sensor_types(code);
+    END IF;
+END $$;
+
+CREATE INDEX IF NOT EXISTS devices_sensor_category_idx
+    ON devices (sensor_category);
+
+CREATE INDEX IF NOT EXISTS devices_sensor_type_code_idx
+    ON devices (sensor_type_code);
 
 CREATE TABLE IF NOT EXISTS sensor_minute (
     ts timestamptz NOT NULL,

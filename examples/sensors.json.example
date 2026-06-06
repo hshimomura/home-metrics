@@ -16,8 +16,11 @@
     },
     {
       "mac": "aa:bb:cc:dd:ee:03",
-      "label": "Blueberry 1",
+      "label": "Blueberry1",
       "sensor_category": "Cisco Sensor Connect (IoT Orchestrator)",
+      "ingest_source": "cisco_sensor_connect",
+      "sensor_type_code": "xiaomi_flower_care",
+      "sensor_category": "plant",
       "location": "Greenhouse",
       "enabled": true,
       "gatt_battery": {

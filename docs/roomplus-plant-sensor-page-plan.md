@@ -1,95 +1,162 @@
 # RoomPlus Plant Sensor Page Plan
 
-This note describes how RoomPlus should separate plant sensors from normal room
-sensors while continuing to use the existing `home-metrics` sensor API.
+This note describes the target `home-metrics` and RoomPlus contract for plant
+sensors. The goal is to classify devices by explicit metadata fields rather
+than by labels, MAC addresses, or overloaded `sensor_category` strings.
 
 ## Goal
 
-RoomPlus should show plant sensors on a dedicated page. Plant sensors should be
-recognized by data from `home-metrics`, not by hard-coded MAC addresses or
-labels.
+RoomPlus should show plant sensors on a dedicated Plants page. Plant sensors
+should be identified from `home-metrics` device metadata.
 
 The first plant target is the Xiaomi Flower Care / MiFlora device collected
 through Cisco Sensor Connect:
 
 ```text
 mac: 5c:85:7e:14:73:7d
-label: blue berry 1
-sensor_category: Cisco Sensor Connect (IoT Orchestrator)
+label: Blueberry1
+ingest_source: cisco_sensor_connect
+sensor_type_code: xiaomi_flower_care
+sensor_category: plant
 ```
 
-## Current home-metrics Signals
+RoomPlus should not use `sensor_category` for plant classification. The previous
+plant-specific `sensor_category` value mixed the ingest path and the user-facing
+sensor category in one string. It should be removed during the metadata
+migration.
 
-`home-metrics` already has the data needed to identify and display plant
-sensors:
+## Target Device Metadata
 
-- `devices.sensor_category`
-- `soil_moisture_percent`
-- `conductivity_us_cm`
+Use separate fields for separate meanings:
 
-Plant readings are stored in the same sensor time-series tables as the existing
-environmental readings:
+```text
+ingest_source      where telemetry comes from
+sensor_type_code   concrete sensor model/protocol decoder
+sensor_category    product/use category for clients
+```
+
+Suggested values:
+
+| Field | Example | Meaning |
+| --- | --- | --- |
+| `ingest_source` | `cisco_sensor_connect` | Telemetry is received through Cisco Sensor Connect (IoT Orchestrator). |
+| `sensor_type_code` | `xiaomi_flower_care` | Decoder/model family for Xiaomi Flower Care / MiFlora. |
+| `sensor_category` | `plant` | RoomPlus should place this device on the Plants page. |
+
+`sensor_category` should not be part of the new RoomPlus contract. Keep it as a
+legacy/display field during the first migration so existing collectors, API
+clients, and dashboards are not broken mid-rollout. RoomPlus should ignore it.
+
+## Target Schema
+
+Add a normalized sensor type table and explicit metadata columns on `devices`:
+
+```sql
+CREATE TABLE sensor_types (
+    code text PRIMARY KEY,
+    display_name text NOT NULL,
+    category text NOT NULL,
+    vendor text,
+    model text,
+    notes text
+);
+
+ALTER TABLE devices
+    ADD COLUMN ingest_source text,
+    ADD COLUMN sensor_type_code text REFERENCES sensor_types(code),
+    ADD COLUMN sensor_category text;
+```
+
+Initial sensor type rows:
+
+```sql
+INSERT INTO sensor_types (code, display_name, category, vendor, model)
+VALUES
+  ('xiaomi_flower_care', 'Xiaomi Flower Care', 'plant', 'Xiaomi / HHCC', 'HHCCJCY01'),
+  ('minew_s1', 'Minew S1', 'environment', 'Minew', 'S1'),
+  ('env_ble', 'Environmental BLE Sensor', 'environment', NULL, NULL)
+ON CONFLICT (code) DO UPDATE SET
+  display_name = EXCLUDED.display_name,
+  category = EXCLUDED.category,
+  vendor = EXCLUDED.vendor,
+  model = EXCLUDED.model;
+```
+
+Backfill examples:
+
+```sql
+UPDATE devices
+SET ingest_source = 'cisco_sensor_connect',
+    sensor_type_code = 'xiaomi_flower_care',
+    sensor_category = 'plant',
+    updated_at = now()
+WHERE mac = '5c:85:7e:14:73:7d';
+
+UPDATE devices
+SET ingest_source = 'cisco_sensor_connect',
+    sensor_category = 'environment',
+    updated_at = now()
+WHERE ingest_source IS NULL
+  AND sensor_category = 'Cisco Sensor Connect (IoT Orchestrator)';
+```
+
+Do not set `sensor_category = NULL` in the first metadata migration. The current
+Cisco Sensor Connect collector still reads `sensor_category` from the sensor config
+and can re-populate the column during device upsert. Nulling or removing
+`sensor_category` should be a later cleanup after the collector, API, RoomPlus, and
+dashboards all use the new metadata fields.
+
+`sensor_category` is a denormalized client-facing copy of
+`sensor_types.category`. The collector/API should fill it from
+`sensor_type_code` when it is omitted. A device-level `sensor_category` may be
+used as an explicit override, but tests or migration checks should catch
+unexpected mismatches between `devices.sensor_type_code`,
+`sensor_types.category`, and `devices.sensor_category`.
+
+Do not create a separate plant telemetry table. Plant readings remain normal
+time-series telemetry keyed by MAC and timestamp in:
 
 - `sensor_minute`
 - `sensor_1hour`
 - `sensor_12hour`
 - `sensor_1day`
 
-This is intentional. Plant readings are still time-series telemetry keyed by
-device MAC and timestamp. Splitting plant readings into a separate database or
-parallel time-series table would duplicate the API, rollup, backup, and client
-logic without solving the page separation problem.
-
-## `sensor_category` Should Not Be Reduced to `plant`
-
-Using `devices.sensor_category = 'plant'` would work as a very small classifier, but
-it would overload `sensor_category` with a different meaning.
-
-The current value:
+Plant-specific values remain nullable metric columns:
 
 ```text
-Cisco Sensor Connect (IoT Orchestrator)
+soil_moisture_percent
+conductivity_us_cm
 ```
 
-preserves two useful pieces of information:
+## Target API Contract
 
-- the transport/integration family: Cisco Sensor Connect
-- the user-facing sensor class: Plant
-
-If RoomPlus needs a short stable value, prefer adding a separate category field
-or deriving one in the app/API:
-
-```text
-sensor_category: Cisco Sensor Connect (IoT Orchestrator)
-category: plant
-```
-
-For the first RoomPlus implementation, avoid a DB migration and derive the
-category from `sensor_category`:
-
-```text
-sensor_category == "Cisco Sensor Connect (IoT Orchestrator)" -> category plant
-otherwise -> category environment
-```
-
-If more classes are added later, such as `energy`, `weather`, or `occupancy`,
-then adding an explicit `devices.device_category` column or API-only `category`
-field becomes reasonable.
-
-## Recommended RoomPlus Contract
-
-RoomPlus should consume `/api/devices` and decode `sensor_category`.
+RoomPlus should consume `/api/devices` and classify devices by
+`sensor_category`.
 
 Example `/api/devices` item:
 
 ```json
 {
   "mac": "5c:85:7e:14:73:7d",
-  "label": "blue berry 1",
-  "sensor_category": "Cisco Sensor Connect (IoT Orchestrator)",
-  "enabled": true
+  "label": "Blueberry1",
+  "location": "Blueberry1",
+  "enabled": true,
+  "ingest_source": "cisco_sensor_connect",
+  "sensor_type_code": "xiaomi_flower_care",
+  "sensor_type": {
+    "code": "xiaomi_flower_care",
+    "display_name": "Xiaomi Flower Care",
+    "category": "plant",
+    "vendor": "Xiaomi / HHCC",
+    "model": "HHCCJCY01"
+  },
+  "sensor_category": "plant"
 }
 ```
+
+`sensor_category` is intentionally duplicated from `sensor_types.category` on
+the device response. This keeps common client filtering simple and lets the API
+hide join details.
 
 Suggested Swift model shape:
 
@@ -99,23 +166,53 @@ struct DeviceSummary: Decodable, Identifiable {
 
     let mac: String
     let label: String
-    let deviceType: String?
     let location: String?
     let enabled: Bool
+    let ingestSource: String?
+    let sensorTypeCode: String?
+    let sensorType: SensorTypeSummary?
+    let sensorCategory: String?
 
     var isPlantSensor: Bool {
-        deviceType == "Cisco Sensor Connect (IoT Orchestrator)"
+        sensorCategory == "plant"
     }
 
     enum CodingKeys: String, CodingKey {
         case mac
         case label
-        case deviceType = "sensor_category"
         case location
         case enabled
+        case ingestSource = "ingest_source"
+        case sensorTypeCode = "sensor_type_code"
+        case sensorType = "sensor_type"
+        case sensorCategory = "sensor_category"
+    }
+}
+
+struct SensorTypeSummary: Decodable {
+    let code: String
+    let displayName: String
+    let category: String
+    let vendor: String?
+    let model: String?
+
+    enum CodingKeys: String, CodingKey {
+        case code
+        case displayName = "display_name"
+        case category
+        case vendor
+        case model
     }
 }
 ```
+
+RoomPlus should not implement a fallback from `sensor_category`.
+
+The checked-in Grafana dashboard uses `sensor_category` for plant filters. Deploy
+the schema migration before importing or refreshing that dashboard in an
+environment that does not already have the new metadata columns.
+
+## Plant Metrics
 
 RoomPlus should add plant metrics to its metric model:
 
@@ -142,9 +239,12 @@ Example `/api/devices/{mac}/latest` response for a plant sensor:
 {
   "device": {
     "mac": "5c:85:7e:14:73:7d",
-    "label": "blue berry 1",
-    "sensor_category": "Cisco Sensor Connect (IoT Orchestrator)",
-    "enabled": true
+    "label": "Blueberry1",
+    "location": "Blueberry1",
+    "enabled": true,
+    "ingest_source": "cisco_sensor_connect",
+    "sensor_type_code": "xiaomi_flower_care",
+    "sensor_category": "plant"
   },
   "ts": "2026-06-06T12:34:00Z",
   "values": {
@@ -169,15 +269,11 @@ Example `/api/devices/{mac}/latest` response for a plant sensor:
 }
 ```
 
-`location` is omitted when empty because the API uses `omitempty`. The Cisco
-Sensor Connect collector may default `location` to the device label when no
-explicit location is configured, so a Flower Care device may also return
-`"location": "blue berry 1"`. RoomPlus should decode it as optional and avoid
-using it for plant classification. The `values` object includes all known
-sensor metric keys; unavailable metrics are returned as `null`.
-`value_timestamps` contains only metrics that have a non-null value and records
-when each metric was measured. The top-level `ts` is the newest timestamp across
-the metric values and remains the device's latest telemetry time.
+The `values` object includes all known sensor metric keys; unavailable metrics
+are returned as `null`. `value_timestamps` contains only metrics that have a
+non-null value and records when each metric was measured. The top-level `ts` is
+the newest timestamp across the metric values and remains the device's latest
+telemetry time.
 
 For Xiaomi Flower Care sensors, `battery_percent` is optional. Passive
 advertisements do not provide it, but `home-metrics` can poll the Flower Care
@@ -195,10 +291,10 @@ RoomPlus should split devices in the client:
 
 ```text
 Sensors page:
-  devices where enabled == true and isPlantSensor == false
+  devices where enabled == true and sensor_category != "plant"
 
 Plants page:
-  devices where enabled == true and isPlantSensor == true
+  devices where enabled == true and sensor_category == "plant"
 ```
 
 Disabled devices should not appear in the normal page lists by default. If
@@ -226,22 +322,25 @@ percentages, but they describe different physical measurements.
 
 ## Fallback Classification
 
-Metric-based classification can be used only as a fallback:
+RoomPlus should not use fallback classification in the normal UI. A plant sensor
+must be classified through `sensor_category = "plant"`.
+
+Metric-based classification can be useful only for diagnostics:
 
 ```text
-latest contains soil_moisture_percent or conductivity_us_cm -> plant-like
+latest contains soil_moisture_percent or conductivity_us_cm -> likely plant
 ```
 
-This should not be the primary rule because it requires latest telemetry before
-classification and can hide a plant device when recent plant values are missing.
-`sensor_category` should remain the primary signal.
+This diagnostic rule should not decide page placement because it requires
+telemetry before classification and can hide a plant device when recent plant
+values are missing.
 
 If `/api/devices/{mac}/latest` returns `404`, RoomPlus should keep the device in
 the Plants page and render it as `No recent reading` or equivalent. A missing
 latest reading means no current telemetry is available; it does not mean the
 device should be removed from the list.
 
-## Future Metadata
+## Future Plant Metadata
 
 If plant-specific management becomes useful, add metadata rather than splitting
 the telemetry database.
@@ -267,23 +366,35 @@ metadata.
 
 ## Implementation Steps
 
-1. Verify the DB row for `5c:85:7e:14:73:7d` has
-   `sensor_category = 'Cisco Sensor Connect (IoT Orchestrator)'`.
-2. Update RoomPlus device API models to decode `sensor_category`.
-3. Add `isPlantSensor` or equivalent derived classification.
-4. Add `soil_moisture_percent` and `conductivity_us_cm` to the RoomPlus metric
+1. Add `sensor_types`, `devices.ingest_source`,
+   `devices.sensor_type_code`, and `devices.sensor_category`.
+2. Update the Cisco Sensor Connect collector to read and upsert
+   `ingest_source`, `sensor_type_code`, and `sensor_category`.
+3. Update `/api/devices` and `/api/devices/{mac}/latest` device payloads to
+   expose the new fields while keeping `sensor_category` as a legacy field.
+4. Backfill `5c:85:7e:14:73:7d` with
+   `sensor_type_code = 'xiaomi_flower_care'` and
+   `sensor_category = 'plant'`.
+5. Update RoomPlus models to decode `ingest_source`, `sensor_type_code`,
+   `sensor_type`, and `sensor_category`.
+6. Classify plant sensors only with `sensor_category == "plant"`.
+7. Add `soil_moisture_percent` and `conductivity_us_cm` to the RoomPlus metric
    model.
-5. Treat `enabled == false` devices as hidden from the default Sensors and
+8. Treat `enabled == false` devices as hidden from the default Sensors and
    Plants pages.
-6. Handle latest `404` as `No recent reading`, not as a missing device.
-7. Add a Plants tab/page and filter plant devices into it.
-8. Filter plant devices out of the normal Sensors page.
-9. Update RoomPlus API contract checks and mock data.
-10. Add UI tests or previews for at least one plant device.
+9. Handle latest `404` as `No recent reading`, not as a missing device.
+10. Add a Plants tab/page and filter plant devices into it.
+11. Filter plant devices out of the normal Sensors page.
+12. Update RoomPlus API contract checks and mock data.
+13. Add UI tests or previews for at least one plant device.
+14. Move Grafana plant dashboard filters from legacy `sensor_category` to
+    `sensor_category` after the production DB has the new column.
+15. Consider nulling or removing legacy `sensor_category` in a later cleanup PR.
 
 ## Non-Goals
 
-- Do not create a separate plant database for the first implementation.
+- Do not create a separate plant database.
 - Do not create a separate plant time-series table unless plant readings need a
   fundamentally different retention, rollup, or ownership model.
-- Do not classify plant sensors by label text or MAC address in RoomPlus.
+- Do not classify plant sensors by label text, MAC address, metric presence, or
+  `sensor_category` in RoomPlus.

@@ -30,24 +30,25 @@ import (
 )
 
 const (
-	defaultDBDSN             = "dbname=ble_sensors host=/var/run/postgresql"
-	defaultSensorsFile       = "/etc/home-metrics/sensors.json"
-	defaultAPIURL            = "https://192.168.67.6:8081"
-	defaultMQTTAddr          = "192.168.67.6:41883"
-	defaultOnboardAppID      = "onboard"
-	defaultControlAppID      = "control"
-	defaultDataAppID         = "data"
-	defaultTopic             = "ioslab/home-metrics/ble/advertisements/v1"
-	sensorConnectSensorCategory  = "Cisco Sensor Connect (IoT Orchestrator)"
-	defaultReconnectMinDelay = time.Second
-	defaultReconnectMaxDelay = time.Minute
-	defaultStreamHeartbeat   = time.Minute
-	defaultAggregateFlush    = 10 * time.Second
-	defaultPendingLog        = 5 * time.Minute
-	defaultMQTTMaxPacket     = 1 << 20
-	defaultGATTBatteryPoll   = 24 * time.Hour
-	defaultGATTBatteryJitter = 30 * time.Minute
-	defaultGATTAdvMaxAge     = 10 * time.Minute
+	defaultDBDSN              = "dbname=ble_sensors host=/var/run/postgresql"
+	defaultSensorsFile        = "/etc/home-metrics/sensors.json"
+	defaultAPIURL             = "https://192.168.67.6:8081"
+	defaultMQTTAddr           = "192.168.67.6:41883"
+	defaultOnboardAppID       = "onboard"
+	defaultControlAppID       = "control"
+	defaultDataAppID          = "data"
+	defaultTopic              = "ioslab/home-metrics/ble/advertisements/v1"
+	sensorConnectSensorCategory   = "Cisco Sensor Connect (IoT Orchestrator)"
+	sensorConnectIngestSource = "cisco_sensor_connect"
+	defaultReconnectMinDelay  = time.Second
+	defaultReconnectMaxDelay  = time.Minute
+	defaultStreamHeartbeat    = time.Minute
+	defaultAggregateFlush     = 10 * time.Second
+	defaultPendingLog         = 5 * time.Minute
+	defaultMQTTMaxPacket      = 1 << 20
+	defaultGATTBatteryPoll    = 24 * time.Hour
+	defaultGATTBatteryJitter  = 30 * time.Minute
+	defaultGATTAdvMaxAge      = 10 * time.Minute
 )
 
 type config struct {
@@ -75,12 +76,15 @@ type config struct {
 }
 
 type targetDevice struct {
-	MAC         string             `json:"mac"`
-	Label       string             `json:"label"`
-	SensorCategory  string             `json:"sensor_category"`
-	Location    string             `json:"location"`
-	Enabled     *bool              `json:"enabled"`
-	GATTBattery *gattBatteryConfig `json:"gatt_battery"`
+	MAC            string             `json:"mac"`
+	Label          string             `json:"label"`
+	SensorCategory     string             `json:"sensor_category"`
+	Location       string             `json:"location"`
+	IngestSource   string             `json:"ingest_source"`
+	SensorTypeCode string             `json:"sensor_type_code"`
+	SensorCategory string             `json:"sensor_category"`
+	Enabled        *bool              `json:"enabled"`
+	GATTBattery    *gattBatteryConfig `json:"gatt_battery"`
 }
 
 type gattBatteryConfig struct {
@@ -103,6 +107,9 @@ type bleReading struct {
 	Label               string
 	SensorCategory          string
 	Location            string
+	IngestSource        string
+	SensorTypeCode      string
+	SensorCategory      string
 	RSSI                *float64
 	TemperatureC        *float64
 	HumidityPercent     *float64
@@ -120,6 +127,9 @@ type aggregate struct {
 	Label               string
 	SensorCategory          string
 	Location            string
+	IngestSource        string
+	SensorTypeCode      string
+	SensorCategory      string
 	Window              time.Time
 	RSSI                []float64
 	TemperatureC        []float64
@@ -475,6 +485,9 @@ func pollGATTBattery(ctx context.Context, cfg config, target targetDevice, c *co
 		Label:          target.Label,
 		SensorCategory:     strings.TrimSpace(target.SensorCategory),
 		Location:       strings.TrimSpace(target.Location),
+		IngestSource:   target.IngestSource,
+		SensorTypeCode: target.SensorTypeCode,
+		SensorCategory: target.SensorCategory,
 		BatteryPercent: floatPtr(float64(battery)),
 	})
 	if _, err := c.flushCompleted(ctx, now.Add(time.Minute).Truncate(time.Minute)); err != nil {
@@ -723,12 +736,43 @@ func loadTargets(path string) (map[string]targetDevice, error) {
 		if device.Label == "" {
 			device.Label = device.MAC
 		}
+		device.SensorCategory = strings.TrimSpace(device.SensorCategory)
+		if device.SensorCategory == "" {
+			device.SensorCategory = sensorConnectSensorCategory
+		}
+		device.Location = strings.TrimSpace(device.Location)
+		device.IngestSource = normalizeIngestSource(device.IngestSource)
+		device.SensorTypeCode = strings.TrimSpace(device.SensorTypeCode)
+		device.SensorCategory = normalizeSensorCategory(device.SensorCategory, device.SensorTypeCode)
 		if device.Enabled != nil && !*device.Enabled {
 			continue
 		}
 		targets[device.MAC] = device
 	}
 	return targets, nil
+}
+
+func normalizeIngestSource(source string) string {
+	source = strings.TrimSpace(source)
+	if source == "" {
+		return sensorConnectIngestSource
+	}
+	return source
+}
+
+func normalizeSensorCategory(category string, sensorTypeCode string) string {
+	category = strings.TrimSpace(category)
+	if category != "" {
+		return category
+	}
+	switch strings.TrimSpace(sensorTypeCode) {
+	case "xiaomi_flower_care":
+		return "plant"
+	case "minew_s1", "env_ble":
+		return "environment"
+	default:
+		return ""
+	}
 }
 
 func decodeDataBatch(payload []byte, targets map[string]targetDevice) ([]bleReading, error) {
@@ -759,6 +803,9 @@ func decodeDataBatch(payload []byte, targets map[string]targetDevice) ([]bleRead
 		decoded.Label = target.Label
 		decoded.SensorCategory = strings.TrimSpace(target.SensorCategory)
 		decoded.Location = strings.TrimSpace(target.Location)
+		decoded.IngestSource = target.IngestSource
+		decoded.SensorTypeCode = target.SensorTypeCode
+		decoded.SensorCategory = target.SensorCategory
 		if msg.RSSI != nil {
 			decoded.RSSI = floatPtr(float64(*msg.RSSI))
 		}
@@ -1366,7 +1413,16 @@ func (c *collector) add(r bleReading) {
 	key := r.SensorMAC + "|" + window.Format(time.RFC3339)
 	agg := c.windows[key]
 	if agg == nil {
-		agg = &aggregate{SensorMAC: r.SensorMAC, Label: r.Label, SensorCategory: r.SensorCategory, Location: r.Location, Window: window}
+		agg = &aggregate{
+			SensorMAC:      r.SensorMAC,
+			Label:          r.Label,
+			SensorCategory:     r.SensorCategory,
+			Location:       r.Location,
+			IngestSource:   r.IngestSource,
+			SensorTypeCode: r.SensorTypeCode,
+			SensorCategory: r.SensorCategory,
+			Window:         window,
+		}
 		c.windows[key] = agg
 	}
 	comparable := readingKey(r)
@@ -1451,7 +1507,7 @@ func (c *collector) flush(ctx context.Context, agg *aggregate) (bool, error) {
 	if c.db == nil || agg.empty() {
 		return false, nil
 	}
-	if err := upsertDevice(ctx, c.db, agg.SensorMAC, agg.Label, agg.SensorCategory, agg.Location); err != nil {
+	if err := upsertDevice(ctx, c.db, agg.SensorMAC, agg.Label, agg.SensorCategory, agg.Location, agg.IngestSource, agg.SensorTypeCode, agg.SensorCategory); err != nil {
 		return false, err
 	}
 	_, err := c.db.Exec(ctx, `
@@ -1494,14 +1550,14 @@ func (c *collector) flush(ctx context.Context, agg *aggregate) (bool, error) {
 
 func ensureDevices(ctx context.Context, db *pgx.Conn, targets map[string]targetDevice) error {
 	for _, target := range targets {
-		if err := upsertDevice(ctx, db, target.MAC, target.Label, target.SensorCategory, target.Location); err != nil {
+		if err := upsertDevice(ctx, db, target.MAC, target.Label, target.SensorCategory, target.Location, target.IngestSource, target.SensorTypeCode, target.SensorCategory); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func upsertDevice(ctx context.Context, db *pgx.Conn, mac string, label string, deviceType string, location string) error {
+func upsertDevice(ctx context.Context, db *pgx.Conn, mac string, label string, deviceType string, location string, ingestSource string, sensorTypeCode string, sensorCategory string) error {
 	label = strings.TrimSpace(label)
 	if label == "" || normalizeMAC(label) == mac {
 		label = mac
@@ -1514,9 +1570,12 @@ func upsertDevice(ctx context.Context, db *pgx.Conn, mac string, label string, d
 	if location == "" {
 		location = label
 	}
+	ingestSource = normalizeIngestSource(ingestSource)
+	sensorTypeCode = strings.TrimSpace(sensorTypeCode)
+	sensorCategory = normalizeSensorCategory(sensorCategory, sensorTypeCode)
 	_, err := db.Exec(ctx, `
-		INSERT INTO devices (mac, label, sensor_category, location)
-		VALUES ($1, $2, $3, $4)
+		INSERT INTO devices (mac, label, sensor_category, location, ingest_source, sensor_type_code, sensor_category)
+		VALUES ($1, $2, $3, $4, NULLIF($5, ''), NULLIF($6, ''), NULLIF($7, ''))
 		ON CONFLICT (mac) DO UPDATE SET
 			label = EXCLUDED.label,
 			sensor_category = CASE
@@ -1525,8 +1584,11 @@ func upsertDevice(ctx context.Context, db *pgx.Conn, mac string, label string, d
 				ELSE devices.sensor_category
 			END,
 			location = COALESCE(devices.location, EXCLUDED.location),
+			ingest_source = COALESCE(NULLIF(EXCLUDED.ingest_source, ''), devices.ingest_source),
+			sensor_type_code = COALESCE(NULLIF(EXCLUDED.sensor_type_code, ''), devices.sensor_type_code),
+			sensor_category = COALESCE(NULLIF(EXCLUDED.sensor_category, ''), devices.sensor_category),
 			updated_at = now()
-	`, mac, label, deviceType, location)
+	`, mac, label, deviceType, location, ingestSource, sensorTypeCode, sensorCategory)
 	return err
 }
 

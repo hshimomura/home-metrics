@@ -118,8 +118,22 @@ func TestLatestResponseKeepsExistingShapeAndAddsValueTimestamps(t *testing.T) {
 	batteryTS := ts.Add(-24 * time.Hour)
 	value := 100.0
 	resp := latestResponse{
-		Device: deviceResponse{MAC: "5c:85:7e:14:73:7d", Label: "blue berry 1", Enabled: true},
-		TS:     ts,
+		Device: deviceResponse{
+			MAC:            "5c:85:7e:14:73:7d",
+			Label:          "Blueberry1",
+			Enabled:        true,
+			IngestSource:   "cisco_sensor_connect",
+			SensorTypeCode: "xiaomi_flower_care",
+			SensorCategory: "plant",
+			SensorType: &sensorTypeResponse{
+				Code:        "xiaomi_flower_care",
+				DisplayName: "Xiaomi Flower Care",
+				Category:    "plant",
+				Vendor:      "Xiaomi / HHCC",
+				Model:       "HHCCJCY01",
+			},
+		},
+		TS: ts,
 		Values: map[string]*float64{
 			"battery_percent": &value,
 			"temperature_c":   nil,
@@ -131,7 +145,18 @@ func TestLatestResponseKeepsExistingShapeAndAddsValueTimestamps(t *testing.T) {
 		t.Fatalf("marshal response: %v", err)
 	}
 	text := string(body)
-	for _, want := range []string{`"device":`, `"ts":`, `"values":`, `"value_timestamps":`, `"battery_percent":100`, `"temperature_c":null`} {
+	for _, want := range []string{
+		`"device":`,
+		`"ts":`,
+		`"values":`,
+		`"value_timestamps":`,
+		`"battery_percent":100`,
+		`"temperature_c":null`,
+		`"ingest_source":"cisco_sensor_connect"`,
+		`"sensor_type_code":"xiaomi_flower_care"`,
+		`"sensor_category":"plant"`,
+		`"sensor_type":`,
+	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("response missing %s: %s", want, text)
 		}

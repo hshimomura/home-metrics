@@ -113,7 +113,7 @@ The first test should stay close to the current Minew S1 flow:
 This path has been validated with a real Flower Care device:
 
 - MAC: `5c:85:7e:14:73:7d`
-- Label: `blue berry 1`
+- Label: `Blueberry1`
 - SCIM device ID: `48c71db0-ce81-43c2-849f-5da7fef23ec4`
 - SCIM application IDs: `onboard`, `control`, and `data`
 - `isRandom`: `false`
@@ -194,7 +194,7 @@ Decode:
 - bytes `02-06`: firmware ASCII, `33 2e 32 2e 32` = `3.2.2`
 
 This repository has also validated a real Cisco Sensor Connect GATT battery
-read from `blue berry 1`:
+read from `Blueberry1`:
 
 ```text
 64 39 33 2e 33 2e 36
@@ -318,8 +318,9 @@ The current implementation includes:
    - `sensor_minute` upserts use the same sparse
      `COALESCE(EXCLUDED.value, sensor_minute.value)` pattern as existing
      advertisement fields.
-   - `sensor_category` from the sensor configuration is passed to device upsert.
-     Flower Care targets use `Cisco Sensor Connect (IoT Orchestrator)`.
+   - Device upsert currently uses the legacy `sensor_category` field from the
+     sensor configuration. The metadata split described below is the target
+     migration, not the current collector behavior.
 
 3. Xiaomi `FE95` advertisement decoding.
    - `serviceDataFromAdvertisement` extracts UUID `0xfe95`.
@@ -380,8 +381,10 @@ The first configured Flower Care target is:
 ```json
 {
   "mac": "5C:85:7E:14:73:7D",
-  "label": "blue berry 1",
-  "sensor_category": "Cisco Sensor Connect (IoT Orchestrator)",
+  "label": "Blueberry1",
+  "ingest_source": "cisco_sensor_connect",
+  "sensor_type_code": "xiaomi_flower_care",
+  "sensor_category": "plant",
   "gatt_battery": {
     "enabled": true,
     "device_id": "48c71db0-ce81-43c2-849f-5da7fef23ec4",
@@ -394,22 +397,42 @@ The first configured Flower Care target is:
 }
 ```
 
-## Device Type and User-Facing Semantics
+## Target Metadata Migration
 
-Use a plant-specific label for Flower Care devices so users do not confuse soil
-moisture with room humidity. Suggested user-facing device type:
+The current collector still writes the legacy `sensor_category` field. The target
+metadata model is:
 
 ```text
-Cisco Sensor Connect (IoT Orchestrator)
+ingest_source: cisco_sensor_connect
+sensor_type_code: xiaomi_flower_care
+sensor_category: plant
 ```
 
-The internal ingest source should stay `cisco_iot_orchestrator` because it
-identifies the transport and deployment path, not the sensor category.
+Implement the metadata migration in this order:
+
+1. Add `sensor_types` and device metadata columns.
+2. Update the Cisco Sensor Connect collector to read and upsert the new fields.
+3. Expose the fields from `/api/devices` and `/api/devices/{mac}/latest`.
+4. Backfill Flower Care devices with `sensor_category = plant`.
+5. Move RoomPlus and Grafana filters to `sensor_category`.
+6. Keep `sensor_category` as a legacy/display field until all clients have moved.
+
+## Device Metadata and User-Facing Semantics
+
+Use a plant-specific label for Flower Care devices so users do not confuse soil
+moisture with room humidity. Do not encode this classification in `sensor_category`.
+The previous plant-specific `sensor_category` value mixed the transport path and
+sensor category and should not be used by new clients.
+
+`ingest_source` identifies the transport and deployment path.
+`sensor_type_code` identifies the concrete decoder/model family.
+`sensor_category` identifies the user-facing category that RoomPlus and Grafana
+can filter on.
 
 RoomPlus and the web UI should treat `humidity_percent` and
 `soil_moisture_percent` as distinct metrics. If a compact display needs only
-one moisture-like value, choose by metric availability and device type rather
-than by writing soil moisture into the air humidity column.
+one moisture-like value, choose by metric availability and `sensor_category`
+rather than by writing soil moisture into the air humidity column.
 
 ## Arrival Checklist
 
@@ -458,7 +481,7 @@ Implemented decoder test fixtures:
   `0e01004802000028d000023c00fb349b`
 - a GATT battery/firmware read response, reference only:
   `5a2b332e322e32`
-- a real Cisco Sensor Connect GATT battery/firmware response from `blue berry 1`:
+- a real Cisco Sensor Connect GATT battery/firmware response from `Blueberry1`:
   `6439332e332e36`, decoded as `battery_percent=100` and firmware `3.3.6`
 
 ## Open Questions

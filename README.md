@@ -45,6 +45,8 @@ web/                                   metrics and admin pages
 Main tables:
 
 - `devices`: configured BLE/environment sensors.
+- `sensor_types`: stable sensor model/decoder metadata used for client
+  categorization.
 - `sensor_minute`: one row per device/minute. Collectors store minute-level
   median samples for environmental values.
 - `sensor_1hour`, `sensor_12hour`, `sensor_1day`: rollup tables refreshed by
@@ -66,6 +68,10 @@ now decoded directly into `sensor_minute`; the collector keeps runtime state in
 Migration `0012_add_plant_sensor_metrics.sql` adds plant sensor columns
 (`soil_moisture_percent` and `conductivity_us_cm`) to `sensor_minute` and all
 rollup tables.
+Migration `0013_add_sensor_type_metadata.sql` adds `sensor_types` and the
+`devices.ingest_source`, `devices.sensor_type_code`, and
+`devices.sensor_category` metadata fields. `sensor_category` remains as a legacy
+display field for existing clients.
 
 ## Configuration
 
@@ -175,11 +181,18 @@ that block remain advertisement-only.
 
 Example Flower Care target:
 
+`sensor_category` is kept only for the current collector's legacy upsert path.
+RoomPlus should ignore it and use `sensor_category` after the metadata
+migration is implemented.
+
 ```json
 {
   "mac": "5C:85:7E:14:73:7D",
-  "label": "blue berry 1",
+  "label": "Blueberry1",
   "sensor_category": "Cisco Sensor Connect (IoT Orchestrator)",
+  "ingest_source": "cisco_sensor_connect",
+  "sensor_type_code": "xiaomi_flower_care",
+  "sensor_category": "plant",
   "gatt_battery": {
     "enabled": true,
     "device_id": "48c71db0-ce81-43c2-849f-5da7fef23ec4",
