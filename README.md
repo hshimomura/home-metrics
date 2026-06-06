@@ -166,6 +166,11 @@ so the last minute is written even if no later MQTT message arrives. If database
 writes fail, pending aggregate windows are retained and summarized in logs at
 `CISCO_IOT_ORCH_PENDING_LOG_INTERVAL`.
 
+Xiaomi Flower Care / MiFlora plant support also uses advertisement telemetry
+only. Flower Care battery and firmware are exposed through connected GATT reads,
+but those reads are intentionally not implemented now to avoid extra sensor
+battery drain and AP BLE connection slot usage.
+
 See
 [docs/xiaomi-flower-care-cisco-sensor-connect.md](docs/xiaomi-flower-care-cisco-sensor-connect.md)
 for preparation notes for testing Xiaomi Flower Care / MiFlora plant sensors.

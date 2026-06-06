@@ -102,3 +102,6 @@ Sensor Connect advertisement telemetry. Migration
 `conductivity_us_cm` to `sensor_minute` and the rollup tables so plant readings
 can use the same latest/series API and web UI as the existing environmental
 metrics.
+Flower Care battery/firmware GATT polling is deliberately not part of this
+release; plant battery values remain unavailable unless a future low-frequency
+GATT polling feature is added.
