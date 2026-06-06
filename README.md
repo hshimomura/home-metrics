@@ -58,9 +58,6 @@ Main tables:
 
 Migration `0008_drop_alarm_features.sql` removes the previous alarm/APNs/webhook
 tables and the old device maintenance columns from existing databases.
-Migrations `` and
-`` update existing user-facing
-Cisco Sensor Connect device type labels.
 Migration `0011_drop_cisco_spaces_raw_events.sql` removes the retired Cisco
 Spaces raw event table from existing databases. Cisco Spaces firehose data is
 now decoded directly into `sensor_minute`; the collector keeps runtime state in
@@ -68,14 +65,9 @@ now decoded directly into `sensor_minute`; the collector keeps runtime state in
 Migration `0012_add_plant_sensor_metrics.sql` adds plant sensor columns
 (`soil_moisture_percent` and `conductivity_us_cm`) to `sensor_minute` and all
 rollup tables.
-Migration `0013_add_sensor_type_metadata.sql` adds `sensor_types` and the
-`devices.ingest_source`, `devices.sensor_type_code`, and
-`devices.sensor_category` metadata fields.
-Migration `0014_rename_blueberry_sensor.sql` renames the first Flower Care
-device to `Blueberry1`.
-Migration `0015_drop_sensor_category.sql` removes the old overloaded
-`devices.sensor_category` field after RoomPlus and Grafana moved to the explicit
-metadata fields.
+`db/schema.sql` is a latest-state fresh DB snapshot. On a fresh database,
+`hm-db-migrate` detects that snapshot and records the existing migrations as the
+baseline before applying future migrations.
 
 ## Configuration
 

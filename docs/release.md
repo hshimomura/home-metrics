@@ -70,13 +70,12 @@ Stable release flow:
 
 `RoomPlus` must follow the API contract published by `home-metrics`.
 
-The API contract format is not finalized yet. The target direction is:
+The API contract is maintained in this repository:
 
-- maintain `docs/openapi.yaml` in this repository
-- lint `docs/openapi.yaml` in CI
-- publish the schema as a release artifact
-- let `RoomPlus` validate its handwritten API client against that schema
-- keep breaking API changes behind a coordinated server/client release
+- `docs/openapi.yaml` is linted in CI.
+- `docs/api.md` explains the implemented REST behavior.
+- `RoomPlus` validates its handwritten API client against the server contract.
+- Breaking API changes are coordinated with RoomPlus and deployment changes.
 
 Generated Swift client code is not used for now. Revisit generation after the API surface
 grows enough that the handwritten client becomes costly to maintain.
@@ -114,3 +113,10 @@ records the measurement timestamp for metrics that have a value. This keeps
 sparse GATT battery readings visible without copying old values into later
 `sensor_minute` rows. `/api/devices/{mac}/series` remains based on original
 measurement timestamps.
+
+Device classification now uses explicit metadata fields:
+
+- `ingest_source`
+- `sensor_type_code`
+- `sensor_type`
+- `sensor_category`

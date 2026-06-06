@@ -10,7 +10,6 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 CREATE TABLE IF NOT EXISTS devices (
     mac text PRIMARY KEY,
     label text NOT NULL,
-    sensor_category text,
     location text,
     ingest_source text,
     sensor_type_code text,

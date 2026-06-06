@@ -406,9 +406,7 @@ sensor_type_code: xiaomi_flower_care
 sensor_category: plant
 ```
 
-`sensor_types` stores the user-facing display name and model metadata. The
-`devices.sensor_category` column was removed after RoomPlus and Grafana moved to
-`sensor_category`.
+`sensor_types` stores the user-facing display name and model metadata.
 
 ## Device Metadata and User-Facing Semantics
 

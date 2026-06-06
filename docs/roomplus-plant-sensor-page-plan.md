@@ -2,7 +2,7 @@
 
 This note describes the current `home-metrics` and RoomPlus contract for plant
 sensors. The goal is to classify devices by explicit metadata fields rather
-than by labels, MAC addresses, or overloaded `sensor_category` strings.
+than by labels or MAC addresses.
 
 ## Goal
 
@@ -20,11 +20,7 @@ sensor_type_code: xiaomi_flower_care
 sensor_category: plant
 ```
 
-RoomPlus does not use `sensor_category` for plant classification. The previous
-plant-specific `sensor_category` value mixed the ingest path and the user-facing
-sensor category in one string, and `home-metrics` no longer exposes it.
-
-## Target Device Metadata
+## Device Metadata
 
 Use separate fields for separate meanings:
 
@@ -34,19 +30,18 @@ sensor_type_code   concrete sensor model/protocol decoder
 sensor_category    product/use category for clients
 ```
 
-Suggested values:
+Current values:
 
 | Field | Example | Meaning |
 | --- | --- | --- |
 | `ingest_source` | `cisco_sensor_connect` | Telemetry is received through Cisco Sensor Connect (IoT Orchestrator). |
 | `sensor_type_code` | `xiaomi_flower_care` | Decoder/model family for Xiaomi Flower Care / MiFlora. |
-| `sensor_category` | `plant` | RoomPlus should place this device on the Plants page. |
+| `sensor_category` | `plant` | RoomPlus places this device on the Plants page. |
 
-`sensor_category` is not part of the RoomPlus contract.
+## Schema
 
-## Target Schema
-
-Add a normalized sensor type table and explicit metadata columns on `devices`:
+`home-metrics` uses a normalized sensor type table and explicit metadata
+columns on `devices`:
 
 ```sql
 CREATE TABLE sensor_types (
@@ -96,10 +91,6 @@ SET ingest_source = 'cisco_sensor_connect',
 WHERE ingest_source IS NULL;
 ```
 
-Migration `0015_drop_sensor_category.sql` removes the old `devices.sensor_category`
-column after the collector, API, RoomPlus, and Grafana dashboard moved to the
-new metadata fields.
-
 `sensor_category` is a denormalized client-facing copy of
 `sensor_types.category`. The collector/API should fill it from
 `sensor_type_code` when it is omitted. A device-level `sensor_category` may be
@@ -122,10 +113,9 @@ soil_moisture_percent
 conductivity_us_cm
 ```
 
-## Target API Contract
+## API Contract
 
-RoomPlus should consume `/api/devices` and classify devices by
-`sensor_category`.
+RoomPlus consumes `/api/devices` and classifies devices by `sensor_category`.
 
 Example `/api/devices` item:
 
@@ -152,7 +142,7 @@ Example `/api/devices` item:
 the device response. This keeps common client filtering simple and lets the API
 hide join details.
 
-Suggested Swift model shape:
+Swift model shape:
 
 ```swift
 struct DeviceSummary: Decodable, Identifiable {
@@ -200,22 +190,20 @@ struct SensorTypeSummary: Decodable {
 }
 ```
 
-RoomPlus should not implement a fallback from `sensor_category`.
-
-The checked-in Grafana dashboard uses `sensor_category` for plant filters. Deploy
-the schema migration before importing or refreshing that dashboard in an
-environment that does not already have the new metadata columns.
+The checked-in Grafana dashboard uses `sensor_category` for plant filters. Make
+sure the target database has the current schema before importing or refreshing
+that dashboard.
 
 ## Plant Metrics
 
-RoomPlus should add plant metrics to its metric model:
+RoomPlus includes plant metrics in its metric model:
 
 ```text
 soil_moisture_percent
 conductivity_us_cm
 ```
 
-Suggested display labels:
+Display labels:
 
 ```text
 soil_moisture_percent -> Soil moisture, %
@@ -224,8 +212,8 @@ conductivity_us_cm -> Conductivity, uS/cm
 
 The API/storage name remains `conductivity_us_cm` because the physical value is
 conductivity. Some plant apps describe this value as fertility, but RoomPlus
-should prefer `Conductivity` or the Japanese label `導電率` to stay aligned with
-the API and web UI.
+uses `Conductivity` or the Japanese label `導電率` to stay aligned with the API
+and web UI.
 
 Example `/api/devices/{mac}/latest` response for a plant sensor:
 
@@ -316,8 +304,7 @@ percentages, but they describe different physical measurements.
 
 ## Fallback Classification
 
-RoomPlus should not use fallback classification in the normal UI. A plant sensor
-must be classified through `sensor_category = "plant"`.
+RoomPlus classifies a plant sensor through `sensor_category = "plant"`.
 
 Metric-based classification can be useful only for diagnostics:
 
@@ -382,12 +369,12 @@ metadata.
 12. Updated RoomPlus API contract checks and mock data.
 13. Added UI tests or previews for at least one plant device.
 14. Moved Grafana plant dashboard filters to `sensor_category`.
-15. Removed legacy `sensor_category` from `home-metrics`.
+15. Removed legacy classification metadata from `home-metrics`.
 
 ## Non-Goals
 
 - Do not create a separate plant database.
 - Do not create a separate plant time-series table unless plant readings need a
   fundamentally different retention, rollup, or ownership model.
-- Do not classify plant sensors by label text, MAC address, metric presence, or
-  `sensor_category` in RoomPlus.
+- Do not classify plant sensors by label text, MAC address, or metric presence
+  in RoomPlus.
