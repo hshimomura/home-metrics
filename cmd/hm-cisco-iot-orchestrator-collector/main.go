@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/tls"
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
@@ -44,6 +45,9 @@ const (
 	defaultAggregateFlush    = 10 * time.Second
 	defaultPendingLog        = 5 * time.Minute
 	defaultMQTTMaxPacket     = 1 << 20
+	defaultGATTBatteryPoll   = 24 * time.Hour
+	defaultGATTBatteryJitter = 30 * time.Minute
+	defaultGATTAdvMaxAge     = 10 * time.Minute
 )
 
 type config struct {
@@ -67,14 +71,26 @@ type config struct {
 	AggregateFlush    time.Duration
 	PendingLog        time.Duration
 	MQTTMaxPacket     int
+	TLSSkipVerify     bool
 }
 
 type targetDevice struct {
-	MAC        string `json:"mac"`
-	Label      string `json:"label"`
-	SensorCategory string `json:"sensor_category"`
-	Location   string `json:"location"`
-	Enabled    *bool  `json:"enabled"`
+	MAC         string             `json:"mac"`
+	Label       string             `json:"label"`
+	SensorCategory  string             `json:"sensor_category"`
+	Location    string             `json:"location"`
+	Enabled     *bool              `json:"enabled"`
+	GATTBattery *gattBatteryConfig `json:"gatt_battery"`
+}
+
+type gattBatteryConfig struct {
+	Enabled             *bool  `json:"enabled"`
+	DeviceID            string `json:"device_id"`
+	ServiceID           string `json:"service_id"`
+	CharacteristicID    string `json:"characteristic_id"`
+	PollInterval        string `json:"poll_interval"`
+	Jitter              string `json:"jitter"`
+	AdvertisementMaxAge string `json:"advertisement_max_age"`
 }
 
 type targetConfig struct {
@@ -119,6 +135,7 @@ type aggregate struct {
 }
 
 type collector struct {
+	mu      sync.Mutex
 	db      *pgx.Conn
 	windows map[string]*aggregate
 	flushFn func(context.Context, *aggregate) (bool, error)
@@ -138,6 +155,10 @@ type dataSubscription struct {
 	BLEMAC      string
 	RSSI        *int32
 	Application string
+}
+
+var doHTTPRequest = func(cfg config, req *http.Request) (*http.Response, error) {
+	return httpClient(cfg).Do(req)
 }
 
 func main() {
@@ -187,6 +208,9 @@ func main() {
 	}
 
 	log.Printf("Cisco Sensor Connect (IoT Orchestrator) collector started mqtt=%s topic=%s data_app=%s control_app=%s dry_run=%t", cfg.MQTTAddr, cfg.Topic, cfg.DataAppID, cfg.ControlAppID, cfg.DryRun)
+	if !cfg.DryRun && db != nil {
+		go runGATTBatteryPoller(ctx, cfg, targets, c, reporter)
+	}
 	runWithReconnect(ctx, cfg, targets, c, reporter)
 	if err := c.flushAll(context.Background()); err != nil {
 		log.Printf("flush on shutdown: %v", err)
@@ -284,7 +308,7 @@ func registerDataApp(ctx context.Context, cfg config) error {
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-API-Key", cfg.ControlAPIKey)
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := doHTTPRequest(cfg, req)
 	if err != nil {
 		return err
 	}
@@ -305,6 +329,353 @@ func registerDataApp(ctx context.Context, cfg config) error {
 	}
 	log.Printf("registered Cisco Sensor Connect data app app=%s control_app=%s topic=%s", cfg.DataAppID, cfg.ControlAppID, cfg.Topic)
 	return nil
+}
+
+func runGATTBatteryPoller(ctx context.Context, cfg config, targets map[string]targetDevice, c *collector, reporter *statusReporter) {
+	pollTargets := gattBatteryTargets(targets)
+	if len(pollTargets) == 0 {
+		return
+	}
+	if strings.TrimSpace(cfg.ControlAPIKey) == "" {
+		log.Printf("Cisco Sensor Connect GATT battery polling disabled: CISCO_IOT_ORCH_CONTROL_API_KEY is empty")
+		return
+	}
+	nextDue := map[string]time.Time{}
+	now := time.Now()
+	for mac, target := range pollTargets {
+		nextDue[mac] = initialGATTBatteryDue(ctx, c.db, target, now)
+		log.Printf("scheduled Cisco Sensor Connect GATT battery poll sensor=%s due=%s", mac, nextDue[mac].Format(time.RFC3339))
+	}
+	ticker := time.NewTicker(time.Minute)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case now = <-ticker.C:
+		}
+		for mac, target := range pollTargets {
+			if now.Before(nextDue[mac]) {
+				continue
+			}
+			if err := pollGATTBattery(ctx, cfg, target, c); err != nil {
+				log.Printf("poll Cisco Sensor Connect GATT battery sensor=%s: %v", mac, err)
+				nextDue[mac] = now.Add(15 * time.Minute)
+				continue
+			}
+			reporter.MarkDataSuccess(ctx)
+			nextDue[mac] = nextGATTBatteryDue(now, target)
+			log.Printf("scheduled next Cisco Sensor Connect GATT battery poll sensor=%s due=%s", mac, nextDue[mac].Format(time.RFC3339))
+		}
+	}
+}
+
+func gattBatteryTargets(targets map[string]targetDevice) map[string]targetDevice {
+	out := map[string]targetDevice{}
+	for mac, target := range targets {
+		if !gattBatteryEnabled(target) {
+			continue
+		}
+		out[mac] = target
+	}
+	return out
+}
+
+func gattBatteryEnabled(target targetDevice) bool {
+	if target.GATTBattery == nil {
+		return false
+	}
+	if target.GATTBattery.Enabled != nil && !*target.GATTBattery.Enabled {
+		return false
+	}
+	return strings.TrimSpace(target.GATTBattery.DeviceID) != ""
+}
+
+func initialGATTBatteryDue(ctx context.Context, db *pgx.Conn, target targetDevice, now time.Time) time.Time {
+	if db == nil {
+		return now.Add(randomNonNegativeDuration(gattBatteryJitter(target)))
+	}
+	lastBattery, err := latestBatteryAt(ctx, db, target.MAC)
+	if err != nil {
+		log.Printf("read latest GATT battery time sensor=%s: %v", target.MAC, err)
+		return now.Add(randomNonNegativeDuration(gattBatteryJitter(target)))
+	}
+	if lastBattery.IsZero() {
+		return now.Add(randomNonNegativeDuration(gattBatteryJitter(target)))
+	}
+	due := lastBattery.Add(gattBatteryPollInterval(target)).Add(randomSignedDuration(gattBatteryJitter(target)))
+	if due.Before(now) {
+		return now
+	}
+	return due
+}
+
+func nextGATTBatteryDue(now time.Time, target targetDevice) time.Time {
+	return now.Add(gattBatteryPollInterval(target)).Add(randomSignedDuration(gattBatteryJitter(target)))
+}
+
+func latestBatteryAt(ctx context.Context, db *pgx.Conn, mac string) (time.Time, error) {
+	var ts *time.Time
+	err := db.QueryRow(ctx, `
+		SELECT max(ts)
+		FROM sensor_minute
+		WHERE mac = $1 AND battery_percent IS NOT NULL
+	`, mac).Scan(&ts)
+	if err != nil {
+		return time.Time{}, err
+	}
+	if ts == nil {
+		return time.Time{}, nil
+	}
+	return *ts, nil
+}
+
+func latestTelemetryAt(ctx context.Context, db *pgx.Conn, mac string) (time.Time, error) {
+	var ts *time.Time
+	err := db.QueryRow(ctx, `
+		SELECT max(ts)
+		FROM sensor_minute
+		WHERE mac = $1 AND (
+			temperature_c IS NOT NULL OR humidity_percent IS NOT NULL OR
+			battery_percent IS NOT NULL OR rssi_dbm IS NOT NULL OR
+			pressure_hpa IS NOT NULL OR co2_ppm IS NOT NULL OR
+			lux IS NOT NULL OR etvoc IS NOT NULL OR
+			soil_moisture_percent IS NOT NULL OR conductivity_us_cm IS NOT NULL
+		)
+	`, mac).Scan(&ts)
+	if err != nil {
+		return time.Time{}, err
+	}
+	if ts == nil {
+		return time.Time{}, nil
+	}
+	return *ts, nil
+}
+
+func pollGATTBattery(ctx context.Context, cfg config, target targetDevice, c *collector) error {
+	if c == nil || c.db == nil {
+		return nil
+	}
+	lastTelemetry, err := latestTelemetryAt(ctx, c.db, target.MAC)
+	if err != nil {
+		return err
+	}
+	maxAge := gattBatteryAdvertisementMaxAge(target)
+	if lastTelemetry.IsZero() || time.Since(lastTelemetry) > maxAge {
+		return fmt.Errorf("latest advertisement is stale: latest=%s max_age=%s", lastTelemetry.Format(time.RFC3339), maxAge)
+	}
+	battery, firmware, err := readGATTBattery(ctx, cfg, *target.GATTBattery)
+	if err != nil {
+		return err
+	}
+	now := time.Now()
+	c.add(bleReading{
+		TS:             now,
+		SensorMAC:      target.MAC,
+		Label:          target.Label,
+		SensorCategory:     strings.TrimSpace(target.SensorCategory),
+		Location:       strings.TrimSpace(target.Location),
+		BatteryPercent: floatPtr(float64(battery)),
+	})
+	if _, err := c.flushCompleted(ctx, now.Add(time.Minute).Truncate(time.Minute)); err != nil {
+		return err
+	}
+	log.Printf("stored Cisco Sensor Connect GATT battery sensor=%s battery=%d firmware=%q", target.MAC, battery, firmware)
+	return nil
+}
+
+func readGATTBattery(ctx context.Context, cfg config, batteryCfg gattBatteryConfig) (int, string, error) {
+	baseBody := map[string]any{
+		"technology": "ble",
+		"id":         strings.TrimSpace(batteryCfg.DeviceID),
+		"controlApp": cfg.ControlAppID,
+	}
+	serviceID := gattBatteryServiceID(batteryCfg)
+	characteristicID := gattBatteryCharacteristicID(batteryCfg)
+	if _, err := controlPost(ctx, cfg, "/control/connectivity/connect", map[string]any{
+		"technology": "ble",
+		"id":         strings.TrimSpace(batteryCfg.DeviceID),
+		"controlApp": cfg.ControlAppID,
+		"ble": map[string]any{
+			"services": []map[string]string{{"serviceID": serviceID}},
+		},
+	}); err != nil {
+		return 0, "", err
+	}
+	defer func() {
+		if _, err := controlPost(context.Background(), cfg, "/control/connectivity/disconnect", baseBody); err != nil {
+			log.Printf("disconnect Cisco Sensor Connect GATT device=%s: %v", strings.TrimSpace(batteryCfg.DeviceID), err)
+		}
+	}()
+	body, err := controlPost(ctx, cfg, "/control/data/read", map[string]any{
+		"technology": "ble",
+		"id":         strings.TrimSpace(batteryCfg.DeviceID),
+		"controlApp": cfg.ControlAppID,
+		"ble": map[string]any{
+			"serviceID":        serviceID,
+			"characteristicID": characteristicID,
+		},
+	})
+	if err != nil {
+		return 0, "", err
+	}
+	var response struct {
+		Value string `json:"value"`
+	}
+	if err := json.Unmarshal(body, &response); err != nil {
+		return 0, "", fmt.Errorf("parse GATT battery response: %w", err)
+	}
+	payload, err := decodeHexValue(response.Value)
+	if err != nil {
+		return 0, "", err
+	}
+	if len(payload) < 1 {
+		return 0, "", errors.New("empty GATT battery payload")
+	}
+	battery := int(payload[0])
+	if battery < 0 || battery > 100 {
+		return 0, "", fmt.Errorf("GATT battery out of range: %d", battery)
+	}
+	firmware := ""
+	if len(payload) >= 3 {
+		firmware = string(payload[2:])
+	}
+	return battery, firmware, nil
+}
+
+func controlPost(ctx context.Context, cfg config, path string, body map[string]any) ([]byte, error) {
+	data, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(cfg.APIURL, "/")+path, bytes.NewReader(data))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("X-API-Key", cfg.ControlAPIKey)
+	resp, err := doHTTPRequest(cfg, req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	limited, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("%s status=%s body=%s", path, resp.Status, string(limited))
+	}
+	var result struct {
+		Status string `json:"status"`
+		Reason string `json:"reason"`
+	}
+	if err := json.Unmarshal(limited, &result); err == nil && strings.EqualFold(result.Status, "FAILURE") {
+		if result.Reason == "" {
+			result.Reason = string(limited)
+		}
+		return nil, fmt.Errorf("%s failed: %s", path, result.Reason)
+	}
+	return limited, nil
+}
+
+func decodeHexValue(value string) ([]byte, error) {
+	value = strings.TrimSpace(value)
+	value = strings.ReplaceAll(value, " ", "")
+	value = strings.ReplaceAll(value, ":", "")
+	value = strings.TrimPrefix(value, "0x")
+	if value == "" {
+		return nil, errors.New("empty hex value")
+	}
+	data, err := hex.DecodeString(value)
+	if err != nil {
+		return nil, fmt.Errorf("decode hex value %q: %w", value, err)
+	}
+	return data, nil
+}
+
+func httpClient(cfg config) *http.Client {
+	if !cfg.TLSSkipVerify {
+		return http.DefaultClient
+	}
+	return &http.Client{
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, //nolint:gosec // Lab IoT Orchestrator uses an IP-address HTTPS endpoint.
+		},
+		Timeout: 60 * time.Second,
+	}
+}
+
+func gattBatteryServiceID(cfg gattBatteryConfig) string {
+	if value := strings.TrimSpace(cfg.ServiceID); value != "" {
+		return value
+	}
+	return "1204"
+}
+
+func gattBatteryCharacteristicID(cfg gattBatteryConfig) string {
+	if value := strings.TrimSpace(cfg.CharacteristicID); value != "" {
+		return value
+	}
+	return "00001a02-0000-1000-8000-00805f9b34fb"
+}
+
+func gattBatteryPollInterval(target targetDevice) time.Duration {
+	if target.GATTBattery == nil {
+		return defaultGATTBatteryPoll
+	}
+	return parsePositiveDuration(target.GATTBattery.PollInterval, defaultGATTBatteryPoll)
+}
+
+func gattBatteryJitter(target targetDevice) time.Duration {
+	if target.GATTBattery == nil {
+		return defaultGATTBatteryJitter
+	}
+	return parseNonNegativeDuration(target.GATTBattery.Jitter, defaultGATTBatteryJitter)
+}
+
+func gattBatteryAdvertisementMaxAge(target targetDevice) time.Duration {
+	if target.GATTBattery == nil {
+		return defaultGATTAdvMaxAge
+	}
+	return parsePositiveDuration(target.GATTBattery.AdvertisementMaxAge, defaultGATTAdvMaxAge)
+}
+
+func parsePositiveDuration(value string, fallback time.Duration) time.Duration {
+	parsed := parseNonNegativeDuration(value, fallback)
+	if parsed <= 0 {
+		return fallback
+	}
+	return parsed
+}
+
+func parseNonNegativeDuration(value string, fallback time.Duration) time.Duration {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return fallback
+	}
+	parsed, err := time.ParseDuration(value)
+	if err != nil || parsed < 0 {
+		return fallback
+	}
+	return parsed
+}
+
+func randomSignedDuration(max time.Duration) time.Duration {
+	if max <= 0 {
+		return 0
+	}
+	return randomNonNegativeDuration(2*max) - max
+}
+
+func randomNonNegativeDuration(max time.Duration) time.Duration {
+	if max <= 0 {
+		return 0
+	}
+	buf := make([]byte, 8)
+	if _, err := rand.Read(buf); err != nil {
+		return time.Duration(time.Now().UnixNano() % int64(max))
+	}
+	value := binary.BigEndian.Uint64(buf)
+	return time.Duration(value % uint64(max))
 }
 
 func loadConfig() config {
@@ -329,6 +700,7 @@ func loadConfig() config {
 		StreamHeartbeat:   envDuration("CISCO_IOT_ORCH_STREAM_HEARTBEAT", defaultStreamHeartbeat),
 		AggregateFlush:    envDuration("CISCO_IOT_ORCH_AGGREGATE_FLUSH_INTERVAL", defaultAggregateFlush),
 		PendingLog:        envDuration("CISCO_IOT_ORCH_PENDING_LOG_INTERVAL", defaultPendingLog),
+		TLSSkipVerify:     envBool("CISCO_IOT_ORCH_TLS_SKIP_VERIFY", true),
 	}
 }
 
@@ -988,6 +1360,8 @@ func (r bleReading) empty() bool {
 }
 
 func (c *collector) add(r bleReading) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	window := r.TS.Truncate(time.Minute)
 	key := r.SensorMAC + "|" + window.Format(time.RFC3339)
 	agg := c.windows[key]
@@ -1013,6 +1387,8 @@ func (c *collector) add(r bleReading) {
 }
 
 func (c *collector) flushCompleted(ctx context.Context, currentWindow time.Time) (int, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	var errs []error
 	flushed := 0
 	for key, agg := range c.windows {
@@ -1032,6 +1408,8 @@ func (c *collector) flushCompleted(ctx context.Context, currentWindow time.Time)
 }
 
 func (c *collector) flushAll(ctx context.Context) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	var errs []error
 	for key, agg := range c.windows {
 		if _, err := c.flushAggregate(ctx, agg); err != nil {
@@ -1051,6 +1429,8 @@ func (c *collector) flushAggregate(ctx context.Context, agg *aggregate) (bool, e
 }
 
 func (c *collector) pendingSummary(now time.Time) (int, time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	count := len(c.windows)
 	if count == 0 {
 		return 0, 0

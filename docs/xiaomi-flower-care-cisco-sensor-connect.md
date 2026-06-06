@@ -40,12 +40,13 @@ This means there are two practical paths:
 - connected GATT read for battery and for deterministic real-time reads if
   advertisement data is incomplete or encrypted
 
-`home-metrics` currently implements only the advertisement path. GATT reads are
-intentionally not implemented for Flower Care at this time. A GATT read requires
-a BLE connection, characteristic read/write operations, and disconnect handling,
-which can increase sensor battery usage and consume AP BLE connection slots.
-Battery and firmware can be added later as low-frequency auxiliary polling if
-that data becomes operationally important.
+`home-metrics` uses the advertisement path for the primary plant measurements.
+GATT reads are used only as optional low-frequency auxiliary polling for battery
+level. A GATT read requires a BLE connection, characteristic read/write
+operations, and disconnect handling, which can increase sensor battery usage and
+consume AP BLE connection slots. For this reason, the production collector does
+not use GATT for temperature, illuminance, soil moisture, conductivity, or
+history.
 
 History GATT reads are out of scope and should not be needed when the beacon
 stream is received reliably.
@@ -123,8 +124,7 @@ placed in soil, but Cisco AP reception through Sensor Connect did receive the
 advertisements. This confirms that the Cisco AP infrastructure is the relevant
 ingest path for this placement.
 
-If advertisements become insufficient in a future implementation, the connected
-GATT path to evaluate is:
+The connected GATT path has also been validated through Cisco Sensor Connect:
 
 1. Discover services for the onboarded device.
 2. Connect to service `00001204-0000-1000-8000-00805f9b34fb`.
@@ -136,8 +136,9 @@ GATT path to evaluate is:
    `00001a02-0000-1000-8000-00805f9b34fb`.
 6. Disconnect after read to minimize battery impact and AP connection slot use.
 
-This path is documented for future work only. The production collector does not
-currently perform Flower Care GATT connections.
+The production collector implements only the connect, battery read, and
+disconnect portion as scheduled battery polling. It does not write `a0 1f`, does
+not read real-time data from `1a01`, and does not read history data.
 
 ## BLE UUIDs and GATT Characteristics
 
@@ -192,8 +193,21 @@ Decode:
 - byte `01`: delimiter/unknown, commonly `0x2b`
 - bytes `02-06`: firmware ASCII, `33 2e 32 2e 32` = `3.2.2`
 
-These GATT examples are protocol references. They are not part of the current
-`home-metrics` Flower Care ingestion path.
+This repository has also validated a real Cisco Sensor Connect GATT battery
+read from `blue berry 1`:
+
+```text
+64 39 33 2e 33 2e 36
+```
+
+Decode:
+
+- byte `00`: `0x64` = `100%`
+- byte `01`: delimiter/unknown, observed as `0x39` on this unit
+- bytes `02-06`: firmware ASCII, `33 2e 33 2e 36` = `3.3.6`
+
+The production collector stores only the battery percentage. Firmware is logged
+for troubleshooting and is not stored in the database.
 
 ## Current Advertisement Decode
 
@@ -239,9 +253,10 @@ Current decoder behavior:
   when present
 - stores decoded beacon values in `home-metrics` and lets the database provide
   history
-- does not connect to Flower Care devices over GATT
-- leaves `battery_percent` unset for Flower Care unless a future advertisement
-  format provides it or a future GATT polling path is explicitly added
+- optionally connects to Flower Care devices over GATT for battery-only polling
+  when `gatt_battery` is configured for that target
+- leaves `battery_percent` unset for Flower Care devices that do not have
+  `gatt_battery` configured
 
 Do not map soil moisture to `humidity_percent`. Both values are percentages,
 but `humidity_percent` means air relative humidity in the current data model,
@@ -337,7 +352,17 @@ The current implementation includes:
      data uses `data`.
    - The advertisement topic is registered and subscribed after onboarding.
 
-The implementation deliberately does not include GATT battery/firmware polling.
+7. Optional low-frequency GATT battery polling.
+   - `gatt_battery` in `sensors.json` enables battery polling for a specific
+     Flower Care target.
+   - The default interval is `24h` with `30m` random jitter.
+   - Before connecting, the collector checks that recent advertisement telemetry
+     exists. The default `advertisement_max_age` is `10m`.
+   - The collector connects to service `1204`, reads characteristic
+     `00001a02-0000-1000-8000-00805f9b34fb`, stores byte `0` as
+     `battery_percent`, logs the firmware string, and disconnects.
+   - GATT polling failures are logged but do not mark the MQTT collector as
+     unhealthy, because this is auxiliary telemetry.
 
 The first configured Flower Care target is:
 
@@ -345,7 +370,16 @@ The first configured Flower Care target is:
 {
   "mac": "5C:85:7E:14:73:7D",
   "label": "blue berry 1",
-  "sensor_category": "Cisco Sensor Connect (IoT Orchestrator)"
+  "sensor_category": "Cisco Sensor Connect (IoT Orchestrator)",
+  "gatt_battery": {
+    "enabled": true,
+    "device_id": "48c71db0-ce81-43c2-849f-5da7fef23ec4",
+    "service_id": "1204",
+    "characteristic_id": "00001a02-0000-1000-8000-00805f9b34fb",
+    "poll_interval": "24h",
+    "jitter": "30m",
+    "advertisement_max_age": "10m"
+  }
 }
 ```
 
@@ -383,8 +417,9 @@ When the device arrives:
    encrypted.
 10. Confirm `0x1008` is stored as `soil_moisture_percent`.
 11. Confirm `0x1009` is stored as `conductivity_us_cm`.
-12. Leave battery/firmware unavailable unless a future low-frequency GATT
-    polling feature is intentionally added.
+12. Add `gatt_battery` only if battery visibility is required. Keep the default
+    24-hour interval and 30-minute jitter unless there is a clear operational
+    reason to poll more often.
 
 ## Implementation Notes
 
@@ -412,17 +447,18 @@ Implemented decoder test fixtures:
   `0e01004802000028d000023c00fb349b`
 - a GATT battery/firmware read response, reference only:
   `5a2b332e322e32`
+- a real Cisco Sensor Connect GATT battery/firmware response from `blue berry 1`:
+  `6439332e332e36`, decoded as `battery_percent=100` and firmware `3.3.6`
 
 ## Open Questions
 
 - Does the purchased unit use model `HHCCJCY01`, `HHCCJCY10`, or another
   variant?
-- If battery/firmware becomes necessary, can Cisco Sensor Connect reliably
-  perform the required write/read sequence against service `1204` without
-  pairing?
-- If battery/firmware becomes necessary, how many connected BLE slots are
-  available on the nearby AP, and how infrequently can polling run without
-  materially affecting sensor battery life?
+- If more plant sensors are added, how many connected BLE slots are available
+  on the nearby AP, and should battery polling be staggered more aggressively
+  than the default 30-minute jitter?
+- Should firmware be stored in a device metadata table later, or is logging it
+  during battery polling sufficient?
 - Is advertisement-only operation sufficient for plant monitoring long term?
 - Should future plant-specific metadata, such as plant name, pot location, and
   watering threshold, live in `devices` or in a separate plant table?

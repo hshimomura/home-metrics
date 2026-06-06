@@ -102,6 +102,9 @@ Sensor Connect advertisement telemetry. Migration
 `conductivity_us_cm` to `sensor_minute` and the rollup tables so plant readings
 can use the same latest/series API and web UI as the existing environmental
 metrics.
-Flower Care battery/firmware GATT polling is deliberately not part of this
-release; plant battery values remain unavailable unless a future low-frequency
-GATT polling feature is added.
+Flower Care battery can be polled through Cisco Sensor Connect GATT control when
+`gatt_battery` is configured for a device. The poller defaults to one read every
+24 hours plus or minus 30 minutes, requires a recent advertisement before
+connecting, stores only `battery_percent`, and disconnects immediately after the
+read. Flower Care real-time GATT reads, history reads, and firmware storage are
+not part of the operational model.

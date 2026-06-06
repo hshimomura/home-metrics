@@ -169,11 +169,11 @@ explicit location is configured, so a Flower Care device may also return
 using it for plant classification. The `values` object includes all known
 sensor metric keys; unavailable metrics are returned as `null`.
 
-For Xiaomi Flower Care sensors, `battery_percent` is expected to be `null` in
-the current implementation. The sensor exposes battery/firmware through a
-connected GATT read, but `home-metrics` intentionally uses only passive
-advertisement telemetry for Flower Care to avoid extra sensor battery drain and
-AP BLE connection slot usage.
+For Xiaomi Flower Care sensors, `battery_percent` is optional. Passive
+advertisements do not provide it, but `home-metrics` can poll the Flower Care
+GATT battery characteristic at a low frequency when `gatt_battery` is configured
+for that device. RoomPlus should display the battery value when present and
+omit or de-emphasize it when it is `null`.
 
 ## Page Split
 

@@ -5,7 +5,10 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
+	"io"
+	"net/http"
 	"strings"
 	"testing"
 	"time"
@@ -326,6 +329,100 @@ func TestReadMQTTPacketAcceptsPayloadAtLimit(t *testing.T) {
 	}
 	if packetType != 3 || string(payload) != "hello" {
 		t.Fatalf("packet=(%d,%q), want (3,hello)", packetType, string(payload))
+	}
+}
+
+func TestReadGATTBatteryConnectsReadsAndDisconnects(t *testing.T) {
+	var paths []string
+	var connectBody map[string]any
+	var readBody map[string]any
+	var disconnected bool
+	originalDo := doHTTPRequest
+	t.Cleanup(func() { doHTTPRequest = originalDo })
+	doHTTPRequest = func(cfg config, r *http.Request) (*http.Response, error) {
+		paths = append(paths, r.URL.Path)
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode request body: %v", err)
+		}
+		response := ``
+		switch r.URL.Path {
+		case "/control/connectivity/connect":
+			connectBody = body
+			response = `{"status":"SUCCESS","id":"device-1"}`
+		case "/control/data/read":
+			readBody = body
+			response = `{"status":"SUCCESS","id":"device-1","value":"6439332E332E36"}`
+		case "/control/connectivity/disconnect":
+			disconnected = true
+			response = `{"status":"SUCCESS","id":"device-1"}`
+		default:
+			return &http.Response{
+				StatusCode: http.StatusNotFound,
+				Status:     "404 Not Found",
+				Body:       io.NopCloser(strings.NewReader(`not found`)),
+			}, nil
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Status:     "200 OK",
+			Body:       io.NopCloser(strings.NewReader(response)),
+		}, nil
+	}
+
+	battery, firmware, err := readGATTBattery(context.Background(), config{
+		APIURL:        "https://orchestrator.example",
+		ControlAppID:  "control",
+		ControlAPIKey: "key",
+	}, gattBatteryConfig{
+		DeviceID: "device-1",
+	})
+	if err != nil {
+		t.Fatalf("readGATTBattery: %v", err)
+	}
+	if battery != 100 {
+		t.Fatalf("battery=%d, want 100", battery)
+	}
+	if firmware != "3.3.6" {
+		t.Fatalf("firmware=%q, want 3.3.6", firmware)
+	}
+	if !disconnected {
+		t.Fatal("disconnect was not called")
+	}
+	if strings.Join(paths, ",") != "/control/connectivity/connect,/control/data/read,/control/connectivity/disconnect" {
+		t.Fatalf("paths=%v", paths)
+	}
+	ble, ok := connectBody["ble"].(map[string]any)
+	if !ok {
+		t.Fatalf("connect ble body=%#v", connectBody["ble"])
+	}
+	services, ok := ble["services"].([]any)
+	if !ok || len(services) != 1 {
+		t.Fatalf("connect services=%#v", ble["services"])
+	}
+	service, ok := services[0].(map[string]any)
+	if !ok || service["serviceID"] != "1204" {
+		t.Fatalf("connect service=%#v", services[0])
+	}
+	readBLE, ok := readBody["ble"].(map[string]any)
+	if !ok {
+		t.Fatalf("read ble body=%#v", readBody["ble"])
+	}
+	if readBLE["serviceID"] != "1204" {
+		t.Fatalf("read serviceID=%#v, want 1204", readBLE["serviceID"])
+	}
+	if readBLE["characteristicID"] != "00001a02-0000-1000-8000-00805f9b34fb" {
+		t.Fatalf("read characteristicID=%#v", readBLE["characteristicID"])
+	}
+}
+
+func TestDecodeHexValueParsesFlowerCareBatteryPayload(t *testing.T) {
+	payload, err := decodeHexValue("6439332E332E36")
+	if err != nil {
+		t.Fatalf("decodeHexValue: %v", err)
+	}
+	if len(payload) != 7 || payload[0] != 100 || string(payload[2:]) != "3.3.6" {
+		t.Fatalf("payload=% x", payload)
 	}
 }
 

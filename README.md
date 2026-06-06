@@ -167,9 +167,40 @@ writes fail, pending aggregate windows are retained and summarized in logs at
 `CISCO_IOT_ORCH_PENDING_LOG_INTERVAL`.
 
 Xiaomi Flower Care / MiFlora plant support also uses advertisement telemetry
-only. Flower Care battery and firmware are exposed through connected GATT reads,
-but those reads are intentionally not implemented now to avoid extra sensor
-battery drain and AP BLE connection slot usage.
+for temperature, illuminance, soil moisture, and conductivity. Flower Care
+battery and firmware are exposed through connected GATT reads, so the collector
+can optionally poll only the battery characteristic at a very low frequency.
+Configure this per device with `gatt_battery` in `sensors.json`; devices without
+that block remain advertisement-only.
+
+Example Flower Care target:
+
+```json
+{
+  "mac": "5C:85:7E:14:73:7D",
+  "label": "blue berry 1",
+  "sensor_category": "Cisco Sensor Connect (IoT Orchestrator)",
+  "gatt_battery": {
+    "enabled": true,
+    "device_id": "48c71db0-ce81-43c2-849f-5da7fef23ec4",
+    "service_id": "1204",
+    "characteristic_id": "00001a02-0000-1000-8000-00805f9b34fb",
+    "poll_interval": "24h",
+    "jitter": "30m",
+    "advertisement_max_age": "10m"
+  }
+}
+```
+
+The scheduler uses the latest stored `battery_percent` to choose the next
+polling time, then adds random jitter. With the default settings, a configured
+plant sensor is polled once every 24 hours plus or minus 30 minutes. Before
+connecting, the collector verifies that a recent advertisement was received; if
+the latest telemetry is older than `advertisement_max_age`, the GATT poll is
+skipped and retried later. Each successful poll connects through the control
+API, reads `1a02`, stores only `battery_percent`, and disconnects. Real-time
+GATT sensor reads and history reads are intentionally not part of the production
+collector.
 
 See
 [docs/xiaomi-flower-care-cisco-sensor-connect.md](docs/xiaomi-flower-care-cisco-sensor-connect.md)

@@ -13,6 +13,22 @@
       "sensor_category": "HibouCO2",
       "location": "Bedroom",
       "enabled": true
+    },
+    {
+      "mac": "aa:bb:cc:dd:ee:03",
+      "label": "Blueberry 1",
+      "sensor_category": "Cisco Sensor Connect (IoT Orchestrator)",
+      "location": "Greenhouse",
+      "enabled": true,
+      "gatt_battery": {
+        "enabled": true,
+        "device_id": "00000000-0000-0000-0000-000000000000",
+        "service_id": "1204",
+        "characteristic_id": "00001a02-0000-1000-8000-00805f9b34fb",
+        "poll_interval": "24h",
+        "jitter": "30m",
+        "advertisement_max_age": "10m"
+      }
     }
   ]
 }
