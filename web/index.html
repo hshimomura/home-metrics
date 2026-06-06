@@ -65,7 +65,7 @@
     <section>
       <h2>Devices</h2>
       <table>
-        <thead><tr><th>MAC</th><th>Label</th><th>Type</th><th>Latest</th><th>Temperature</th><th>Humidity</th><th>Soil</th><th>Conductivity</th><th>Battery</th><th>Lux</th><th>CO2</th></tr></thead>
+        <thead><tr><th>MAC</th><th>Label</th><th>Sensor</th><th>Latest</th><th>Temperature</th><th>Humidity</th><th>Soil</th><th>Conductivity</th><th>Battery</th><th>Lux</th><th>CO2</th></tr></thead>
         <tbody id="devices"></tbody>
       </table>
     </section>
@@ -246,7 +246,8 @@
         document.querySelector('#devices').innerHTML = latest.map(({ device, latest }) => {
           const values = latest?.values || {};
           const valueTimestamps = latest?.value_timestamps || {};
-          return `<tr><td><button class="link-button" data-mac="${escapeHTML(device.mac)}">${escapeHTML(device.mac)}</button></td><td>${escapeHTML(device.label)}</td><td>${escapeHTML(cell(device.sensor_category))}</td><td>${escapeHTML(cell(latest?.ts))}</td><td>${metricCell(values, valueTimestamps, 'temperature_c')}</td><td>${metricCell(values, valueTimestamps, 'humidity_percent')}</td><td>${metricCell(values, valueTimestamps, 'soil_moisture_percent', 0)}</td><td>${metricCell(values, valueTimestamps, 'conductivity_us_cm', 0)}</td><td>${metricCell(values, valueTimestamps, 'battery_percent', 0)}</td><td>${metricCell(values, valueTimestamps, 'lux', 0)}</td><td>${metricCell(values, valueTimestamps, 'co2_ppm', 0)}</td></tr>`;
+          const sensorName = device.sensor_type?.display_name || device.sensor_type_code || device.sensor_category || device.ingest_source;
+          return `<tr><td><button class="link-button" data-mac="${escapeHTML(device.mac)}">${escapeHTML(device.mac)}</button></td><td>${escapeHTML(device.label)}</td><td>${escapeHTML(cell(sensorName))}</td><td>${escapeHTML(cell(latest?.ts))}</td><td>${metricCell(values, valueTimestamps, 'temperature_c')}</td><td>${metricCell(values, valueTimestamps, 'humidity_percent')}</td><td>${metricCell(values, valueTimestamps, 'soil_moisture_percent', 0)}</td><td>${metricCell(values, valueTimestamps, 'conductivity_us_cm', 0)}</td><td>${metricCell(values, valueTimestamps, 'battery_percent', 0)}</td><td>${metricCell(values, valueTimestamps, 'lux', 0)}</td><td>${metricCell(values, valueTimestamps, 'co2_ppm', 0)}</td></tr>`;
         }).join('');
         if (!selectedDevice && latest.length) {
           await selectDevice(latest[0].device);

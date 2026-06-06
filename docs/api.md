@@ -52,8 +52,7 @@ consecutive failures, or has not updated within `COLLECTOR_STATUS_STALE_AFTER`
 
 Returns configured sensor devices.
 
-Device responses include legacy `sensor_category` for existing clients and the
-new explicit metadata fields for clients that need stable classification:
+Device responses include explicit metadata fields for stable classification:
 
 - `ingest_source`: telemetry ingest path, for example `cisco_sensor_connect`.
 - `sensor_type_code`: concrete sensor model/decoder, for example
@@ -62,8 +61,7 @@ new explicit metadata fields for clients that need stable classification:
 - `sensor_category`: client-facing category, for example `plant` or
   `environment`.
 
-RoomPlus should classify plant sensors with `sensor_category == "plant"` and
-should not use `sensor_category` for plant classification.
+RoomPlus and Grafana classify plant sensors with `sensor_category == "plant"`.
 
 ### GET /api/devices/{mac}/latest
 

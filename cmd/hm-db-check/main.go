@@ -17,8 +17,9 @@ import (
 const defaultDBDSN = "dbname=ble_sensors host=/var/run/postgresql"
 
 type device struct {
-	MAC        string
-	Label      string
+	MAC            string
+	Label          string
+	SensorTypeCode string
 	SensorCategory string
 }
 
@@ -79,7 +80,7 @@ func main() {
 
 func loadDevices(ctx context.Context, db *pgx.Conn) ([]device, error) {
 	rows, err := db.Query(ctx, `
-		SELECT mac, label, COALESCE(sensor_category, '')
+		SELECT mac, label, COALESCE(sensor_type_code, ''), COALESCE(sensor_category, '')
 		FROM devices
 		WHERE enabled
 		ORDER BY mac
@@ -92,7 +93,7 @@ func loadDevices(ctx context.Context, db *pgx.Conn) ([]device, error) {
 	var devices []device
 	for rows.Next() {
 		var d device
-		if err := rows.Scan(&d.MAC, &d.Label, &d.SensorCategory); err != nil {
+		if err := rows.Scan(&d.MAC, &d.Label, &d.SensorTypeCode, &d.SensorCategory); err != nil {
 			return nil, err
 		}
 		devices = append(devices, d)
@@ -103,7 +104,7 @@ func loadDevices(ctx context.Context, db *pgx.Conn) ([]device, error) {
 func chooseDevice(reader *bufio.Reader, devices []device) (device, error) {
 	fmt.Println("Devices:")
 	for i, d := range devices {
-		fmt.Printf("%2d. %-17s %-12s %s\n", i+1, d.MAC, d.Label, d.SensorCategory)
+		fmt.Printf("%2d. %-17s %-12s %-24s %s\n", i+1, d.MAC, d.Label, d.SensorTypeCode, d.SensorCategory)
 	}
 	index, err := promptIndex(reader, "Select device", len(devices))
 	if err != nil {

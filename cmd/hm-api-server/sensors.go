@@ -16,7 +16,6 @@ import (
 type deviceResponse struct {
 	MAC            string              `json:"mac"`
 	Label          string              `json:"label"`
-	SensorCategory     string              `json:"sensor_category,omitempty"`
 	Location       string              `json:"location,omitempty"`
 	Enabled        bool                `json:"enabled"`
 	IngestSource   string              `json:"ingest_source,omitempty"`
@@ -84,7 +83,6 @@ func (api *apiServer) handleDevices(w http.ResponseWriter, r *http.Request) {
 		SELECT
 			d.mac,
 			d.label,
-			COALESCE(d.sensor_category, ''),
 			COALESCE(d.location, ''),
 			d.enabled,
 			COALESCE(d.ingest_source, ''),
@@ -288,7 +286,6 @@ func (api *apiServer) loadDevice(ctx context.Context, mac string) (deviceRespons
 		SELECT
 			d.mac,
 			d.label,
-			COALESCE(d.sensor_category, ''),
 			COALESCE(d.location, ''),
 			d.enabled,
 			COALESCE(d.ingest_source, ''),
@@ -325,7 +322,6 @@ func scanDeviceResponse(row deviceScanner, d *deviceResponse) error {
 	if err := row.Scan(
 		&d.MAC,
 		&d.Label,
-		&d.SensorCategory,
 		&d.Location,
 		&d.Enabled,
 		&d.IngestSource,

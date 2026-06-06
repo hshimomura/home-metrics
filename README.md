@@ -70,11 +70,12 @@ Migration `0012_add_plant_sensor_metrics.sql` adds plant sensor columns
 rollup tables.
 Migration `0013_add_sensor_type_metadata.sql` adds `sensor_types` and the
 `devices.ingest_source`, `devices.sensor_type_code`, and
-`devices.sensor_category` metadata fields. `sensor_category` remains as a legacy
-display field for existing clients.
+`devices.sensor_category` metadata fields.
 Migration `0014_rename_blueberry_sensor.sql` renames the first Flower Care
-device to `Blueberry1` and replaces the old plant-specific `sensor_category` value
-with the generic Cisco Sensor Connect display value.
+device to `Blueberry1`.
+Migration `0015_drop_sensor_category.sql` removes the old overloaded
+`devices.sensor_category` field after RoomPlus and Grafana moved to the explicit
+metadata fields.
 
 ## Configuration
 
@@ -184,15 +185,10 @@ that block remain advertisement-only.
 
 Example Flower Care target:
 
-`sensor_category` is kept only for the current collector's legacy upsert path.
-RoomPlus should ignore it and use `sensor_category` after the metadata
-migration is implemented.
-
 ```json
 {
   "mac": "5C:85:7E:14:73:7D",
   "label": "Blueberry1",
-  "sensor_category": "Cisco Sensor Connect (IoT Orchestrator)",
   "ingest_source": "cisco_sensor_connect",
   "sensor_type_code": "xiaomi_flower_care",
   "sensor_category": "plant",

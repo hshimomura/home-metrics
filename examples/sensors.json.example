@@ -3,21 +3,23 @@
     {
       "mac": "aa:bb:cc:dd:ee:01",
       "label": "Living room",
-      "sensor_category": "Minew",
+      "ingest_source": "ble",
+      "sensor_type_code": "minew_s1",
+      "sensor_category": "environment",
       "location": "Living room",
       "enabled": true
     },
     {
       "mac": "aa:bb:cc:dd:ee:02",
       "label": "Bedroom CO2",
-      "sensor_category": "HibouCO2",
+      "ingest_source": "ble",
+      "sensor_category": "environment",
       "location": "Bedroom",
       "enabled": true
     },
     {
       "mac": "aa:bb:cc:dd:ee:03",
       "label": "Blueberry1",
-      "sensor_category": "Cisco Sensor Connect (IoT Orchestrator)",
       "ingest_source": "cisco_sensor_connect",
       "sensor_type_code": "xiaomi_flower_care",
       "sensor_category": "plant",

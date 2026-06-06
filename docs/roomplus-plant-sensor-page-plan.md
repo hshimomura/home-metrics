@@ -1,6 +1,6 @@
 # RoomPlus Plant Sensor Page Plan
 
-This note describes the target `home-metrics` and RoomPlus contract for plant
+This note describes the current `home-metrics` and RoomPlus contract for plant
 sensors. The goal is to classify devices by explicit metadata fields rather
 than by labels, MAC addresses, or overloaded `sensor_category` strings.
 
@@ -20,10 +20,9 @@ sensor_type_code: xiaomi_flower_care
 sensor_category: plant
 ```
 
-RoomPlus should not use `sensor_category` for plant classification. The previous
+RoomPlus does not use `sensor_category` for plant classification. The previous
 plant-specific `sensor_category` value mixed the ingest path and the user-facing
-sensor category in one string. It should be removed during the metadata
-migration.
+sensor category in one string, and `home-metrics` no longer exposes it.
 
 ## Target Device Metadata
 
@@ -43,9 +42,7 @@ Suggested values:
 | `sensor_type_code` | `xiaomi_flower_care` | Decoder/model family for Xiaomi Flower Care / MiFlora. |
 | `sensor_category` | `plant` | RoomPlus should place this device on the Plants page. |
 
-`sensor_category` should not be part of the new RoomPlus contract. Keep it as a
-legacy/display field during the first migration so existing collectors, API
-clients, and dashboards are not broken mid-rollout. RoomPlus should ignore it.
+`sensor_category` is not part of the RoomPlus contract.
 
 ## Target Schema
 
@@ -96,15 +93,12 @@ UPDATE devices
 SET ingest_source = 'cisco_sensor_connect',
     sensor_category = 'environment',
     updated_at = now()
-WHERE ingest_source IS NULL
-  AND sensor_category = 'Cisco Sensor Connect (IoT Orchestrator)';
+WHERE ingest_source IS NULL;
 ```
 
-Do not set `sensor_category = NULL` in the first metadata migration. The current
-Cisco Sensor Connect collector still reads `sensor_category` from the sensor config
-and can re-populate the column during device upsert. Nulling or removing
-`sensor_category` should be a later cleanup after the collector, API, RoomPlus, and
-dashboards all use the new metadata fields.
+Migration `0015_drop_sensor_category.sql` removes the old `devices.sensor_category`
+column after the collector, API, RoomPlus, and Grafana dashboard moved to the
+new metadata fields.
 
 `sensor_category` is a denormalized client-facing copy of
 `sensor_types.category`. The collector/API should fill it from
@@ -364,32 +358,31 @@ CREATE TABLE plant_devices (
 This keeps telemetry in the existing sensor tables and adds only plant-specific
 metadata.
 
-## Implementation Steps
+## Implementation State
 
-1. Add `sensor_types`, `devices.ingest_source`,
+1. Added `sensor_types`, `devices.ingest_source`,
    `devices.sensor_type_code`, and `devices.sensor_category`.
-2. Update the Cisco Sensor Connect collector to read and upsert
+2. Updated the Cisco Sensor Connect collector to read and upsert
    `ingest_source`, `sensor_type_code`, and `sensor_category`.
-3. Update `/api/devices` and `/api/devices/{mac}/latest` device payloads to
-   expose the new fields while keeping `sensor_category` as a legacy field.
-4. Backfill `5c:85:7e:14:73:7d` with
+3. Updated `/api/devices` and `/api/devices/{mac}/latest` device payloads to
+   expose the new fields.
+4. Backfilled `5c:85:7e:14:73:7d` with
    `sensor_type_code = 'xiaomi_flower_care'` and
    `sensor_category = 'plant'`.
-5. Update RoomPlus models to decode `ingest_source`, `sensor_type_code`,
+5. Updated RoomPlus models to decode `ingest_source`, `sensor_type_code`,
    `sensor_type`, and `sensor_category`.
-6. Classify plant sensors only with `sensor_category == "plant"`.
-7. Add `soil_moisture_percent` and `conductivity_us_cm` to the RoomPlus metric
+6. Classified plant sensors only with `sensor_category == "plant"`.
+7. Added `soil_moisture_percent` and `conductivity_us_cm` to the RoomPlus metric
    model.
-8. Treat `enabled == false` devices as hidden from the default Sensors and
+8. Treated `enabled == false` devices as hidden from the default Sensors and
    Plants pages.
-9. Handle latest `404` as `No recent reading`, not as a missing device.
-10. Add a Plants tab/page and filter plant devices into it.
-11. Filter plant devices out of the normal Sensors page.
-12. Update RoomPlus API contract checks and mock data.
-13. Add UI tests or previews for at least one plant device.
-14. Move Grafana plant dashboard filters from legacy `sensor_category` to
-    `sensor_category` after the production DB has the new column.
-15. Consider nulling or removing legacy `sensor_category` in a later cleanup PR.
+9. Handled latest `404` as `No recent reading`, not as a missing device.
+10. Added a Plants tab/page and filtered plant devices into it.
+11. Filtered plant devices out of the normal Sensors page.
+12. Updated RoomPlus API contract checks and mock data.
+13. Added UI tests or previews for at least one plant device.
+14. Moved Grafana plant dashboard filters to `sensor_category`.
+15. Removed legacy `sensor_category` from `home-metrics`.
 
 ## Non-Goals
 

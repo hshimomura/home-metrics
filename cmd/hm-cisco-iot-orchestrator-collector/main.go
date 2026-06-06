@@ -38,7 +38,6 @@ const (
 	defaultControlAppID       = "control"
 	defaultDataAppID          = "data"
 	defaultTopic              = "ioslab/home-metrics/ble/advertisements/v1"
-	sensorConnectSensorCategory   = "Cisco Sensor Connect (IoT Orchestrator)"
 	sensorConnectIngestSource = "cisco_sensor_connect"
 	defaultReconnectMinDelay  = time.Second
 	defaultReconnectMaxDelay  = time.Minute
@@ -78,7 +77,6 @@ type config struct {
 type targetDevice struct {
 	MAC            string             `json:"mac"`
 	Label          string             `json:"label"`
-	SensorCategory     string             `json:"sensor_category"`
 	Location       string             `json:"location"`
 	IngestSource   string             `json:"ingest_source"`
 	SensorTypeCode string             `json:"sensor_type_code"`
@@ -105,7 +103,6 @@ type bleReading struct {
 	TS                  time.Time
 	SensorMAC           string
 	Label               string
-	SensorCategory          string
 	Location            string
 	IngestSource        string
 	SensorTypeCode      string
@@ -125,7 +122,6 @@ type bleReading struct {
 type aggregate struct {
 	SensorMAC           string
 	Label               string
-	SensorCategory          string
 	Location            string
 	IngestSource        string
 	SensorTypeCode      string
@@ -483,7 +479,6 @@ func pollGATTBattery(ctx context.Context, cfg config, target targetDevice, c *co
 		TS:             now,
 		SensorMAC:      target.MAC,
 		Label:          target.Label,
-		SensorCategory:     strings.TrimSpace(target.SensorCategory),
 		Location:       strings.TrimSpace(target.Location),
 		IngestSource:   target.IngestSource,
 		SensorTypeCode: target.SensorTypeCode,
@@ -736,10 +731,6 @@ func loadTargets(path string) (map[string]targetDevice, error) {
 		if device.Label == "" {
 			device.Label = device.MAC
 		}
-		device.SensorCategory = strings.TrimSpace(device.SensorCategory)
-		if device.SensorCategory == "" {
-			device.SensorCategory = sensorConnectSensorCategory
-		}
 		device.Location = strings.TrimSpace(device.Location)
 		device.IngestSource = normalizeIngestSource(device.IngestSource)
 		device.SensorTypeCode = strings.TrimSpace(device.SensorTypeCode)
@@ -801,7 +792,6 @@ func decodeDataBatch(payload []byte, targets map[string]targetDevice) ([]bleRead
 		}
 		decoded.SensorMAC = mac
 		decoded.Label = target.Label
-		decoded.SensorCategory = strings.TrimSpace(target.SensorCategory)
 		decoded.Location = strings.TrimSpace(target.Location)
 		decoded.IngestSource = target.IngestSource
 		decoded.SensorTypeCode = target.SensorTypeCode
@@ -1416,7 +1406,6 @@ func (c *collector) add(r bleReading) {
 		agg = &aggregate{
 			SensorMAC:      r.SensorMAC,
 			Label:          r.Label,
-			SensorCategory:     r.SensorCategory,
 			Location:       r.Location,
 			IngestSource:   r.IngestSource,
 			SensorTypeCode: r.SensorTypeCode,
@@ -1507,7 +1496,7 @@ func (c *collector) flush(ctx context.Context, agg *aggregate) (bool, error) {
 	if c.db == nil || agg.empty() {
 		return false, nil
 	}
-	if err := upsertDevice(ctx, c.db, agg.SensorMAC, agg.Label, agg.SensorCategory, agg.Location, agg.IngestSource, agg.SensorTypeCode, agg.SensorCategory); err != nil {
+	if err := upsertDevice(ctx, c.db, agg.SensorMAC, agg.Label, agg.Location, agg.IngestSource, agg.SensorTypeCode, agg.SensorCategory); err != nil {
 		return false, err
 	}
 	_, err := c.db.Exec(ctx, `
@@ -1550,21 +1539,17 @@ func (c *collector) flush(ctx context.Context, agg *aggregate) (bool, error) {
 
 func ensureDevices(ctx context.Context, db *pgx.Conn, targets map[string]targetDevice) error {
 	for _, target := range targets {
-		if err := upsertDevice(ctx, db, target.MAC, target.Label, target.SensorCategory, target.Location, target.IngestSource, target.SensorTypeCode, target.SensorCategory); err != nil {
+		if err := upsertDevice(ctx, db, target.MAC, target.Label, target.Location, target.IngestSource, target.SensorTypeCode, target.SensorCategory); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func upsertDevice(ctx context.Context, db *pgx.Conn, mac string, label string, deviceType string, location string, ingestSource string, sensorTypeCode string, sensorCategory string) error {
+func upsertDevice(ctx context.Context, db *pgx.Conn, mac string, label string, location string, ingestSource string, sensorTypeCode string, sensorCategory string) error {
 	label = strings.TrimSpace(label)
 	if label == "" || normalizeMAC(label) == mac {
 		label = mac
-	}
-	deviceType = strings.TrimSpace(deviceType)
-	if deviceType == "" {
-		deviceType = sensorConnectSensorCategory
 	}
 	location = strings.TrimSpace(location)
 	if location == "" {
@@ -1574,21 +1559,16 @@ func upsertDevice(ctx context.Context, db *pgx.Conn, mac string, label string, d
 	sensorTypeCode = strings.TrimSpace(sensorTypeCode)
 	sensorCategory = normalizeSensorCategory(sensorCategory, sensorTypeCode)
 	_, err := db.Exec(ctx, `
-		INSERT INTO devices (mac, label, sensor_category, location, ingest_source, sensor_type_code, sensor_category)
-		VALUES ($1, $2, $3, $4, NULLIF($5, ''), NULLIF($6, ''), NULLIF($7, ''))
+		INSERT INTO devices (mac, label, location, ingest_source, sensor_type_code, sensor_category)
+		VALUES ($1, $2, $3, NULLIF($4, ''), NULLIF($5, ''), NULLIF($6, ''))
 		ON CONFLICT (mac) DO UPDATE SET
 			label = EXCLUDED.label,
-			sensor_category = CASE
-				WHEN devices.sensor_category IS NULL OR devices.sensor_category = '' OR devices.sensor_category IN ('Cisco IoT Orchestrator', 'Cisco Spaces', 'Cisco Sensor Connect (IoT Orchestrator)')
-				THEN EXCLUDED.sensor_category
-				ELSE devices.sensor_category
-			END,
 			location = COALESCE(devices.location, EXCLUDED.location),
 			ingest_source = COALESCE(NULLIF(EXCLUDED.ingest_source, ''), devices.ingest_source),
 			sensor_type_code = COALESCE(NULLIF(EXCLUDED.sensor_type_code, ''), devices.sensor_type_code),
 			sensor_category = COALESCE(NULLIF(EXCLUDED.sensor_category, ''), devices.sensor_category),
 			updated_at = now()
-	`, mac, label, deviceType, location, ingestSource, sensorTypeCode, sensorCategory)
+	`, mac, label, location, ingestSource, sensorTypeCode, sensorCategory)
 	return err
 }
 

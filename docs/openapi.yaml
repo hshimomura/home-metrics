@@ -192,9 +192,6 @@ components:
           type: string
         label:
           type: string
-        sensor_category:
-          type: string
-          description: Legacy display field. New clients should use ingest_source, sensor_type_code, and sensor_category.
         location:
           type: string
         enabled:

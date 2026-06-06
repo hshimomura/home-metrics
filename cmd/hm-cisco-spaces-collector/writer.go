@@ -71,7 +71,7 @@ func pruneConfiguredBLESensors(ctx context.Context, db *pgx.Conn, path string) e
 		tag, err := db.Exec(ctx, `
 			DELETE FROM devices d
 			WHERE d.mac = $1
-				AND COALESCE(d.sensor_category, '') <> 'Cisco Spaces'
+				AND COALESCE(d.ingest_source, '') <> 'cisco_spaces'
 				AND NOT EXISTS (SELECT 1 FROM sensor_minute s WHERE s.mac = d.mac)
 				AND NOT EXISTS (SELECT 1 FROM sensor_1hour s WHERE s.mac = d.mac)
 				AND NOT EXISTS (SELECT 1 FROM sensor_12hour s WHERE s.mac = d.mac)
@@ -91,7 +91,7 @@ func pruneConfiguredBLESensors(ctx context.Context, db *pgx.Conn, path string) e
 				updated_at = now()
 			WHERE mac = $1
 				AND enabled
-				AND COALESCE(sensor_category, '') <> 'Cisco Spaces'
+				AND COALESCE(ingest_source, '') <> 'cisco_spaces'
 		`, mac)
 		if err != nil {
 			return fmt.Errorf("disable configured BLE sensor %s: %w", mac, err)
@@ -134,14 +134,15 @@ func upsertDevice(ctx context.Context, db *pgx.Conn, reading sensorReading) erro
 		label = reading.MAC
 	}
 	_, err := db.Exec(ctx, `
-		INSERT INTO devices (mac, label, sensor_category, location)
-		VALUES ($1, $2, $3, $4)
+		INSERT INTO devices (mac, label, location, ingest_source, sensor_category)
+		VALUES ($1, $2, $3, 'cisco_spaces', 'environment')
 		ON CONFLICT (mac) DO UPDATE SET
-			label = CASE WHEN $5 THEN EXCLUDED.label ELSE devices.label END,
-			sensor_category = COALESCE(devices.sensor_category, EXCLUDED.sensor_category),
+			label = CASE WHEN $4 THEN EXCLUDED.label ELSE devices.label END,
 			location = COALESCE(devices.location, EXCLUDED.location),
+			ingest_source = COALESCE(devices.ingest_source, EXCLUDED.ingest_source),
+			sensor_category = COALESCE(devices.sensor_category, EXCLUDED.sensor_category),
 			updated_at = now()
-	`, reading.MAC, label, "Cisco Spaces", nullableString(label, hasLabel), hasLabel)
+	`, reading.MAC, label, nullableString(label, hasLabel), hasLabel)
 	return err
 }
 

@@ -205,7 +205,6 @@ func TestCollectorAggregatesSparseFlowerCareAdvertisements(t *testing.T) {
 		TS:                  window.Add(5 * time.Second),
 		SensorMAC:           "5c:85:7e:14:73:7d",
 		Label:               "Blueberry1",
-		SensorCategory:          sensorConnectSensorCategory,
 		IngestSource:        sensorConnectIngestSource,
 		SensorTypeCode:      "xiaomi_flower_care",
 		SensorCategory:      "plant",
@@ -215,7 +214,6 @@ func TestCollectorAggregatesSparseFlowerCareAdvertisements(t *testing.T) {
 		TS:               window.Add(15 * time.Second),
 		SensorMAC:        "5c:85:7e:14:73:7d",
 		Label:            "Blueberry1",
-		SensorCategory:       sensorConnectSensorCategory,
 		IngestSource:     sensorConnectIngestSource,
 		SensorTypeCode:   "xiaomi_flower_care",
 		SensorCategory:   "plant",
@@ -225,9 +223,6 @@ func TestCollectorAggregatesSparseFlowerCareAdvertisements(t *testing.T) {
 	agg := c.windows["5c:85:7e:14:73:7d|"+window.Format(time.RFC3339)]
 	if agg == nil {
 		t.Fatal("aggregate not found")
-	}
-	if agg.SensorCategory != sensorConnectSensorCategory {
-		t.Fatalf("device type=%q, want %q", agg.SensorCategory, sensorConnectSensorCategory)
 	}
 	if agg.IngestSource != sensorConnectIngestSource {
 		t.Fatalf("ingest source=%q, want %q", agg.IngestSource, sensorConnectIngestSource)

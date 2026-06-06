@@ -50,11 +50,13 @@ type pendingOutlier struct {
 }
 
 type targetDevice struct {
-	MAC        string `json:"mac"`
-	Label      string `json:"label"`
+	MAC            string `json:"mac"`
+	Label          string `json:"label"`
+	Location       string `json:"location"`
+	IngestSource   string `json:"ingest_source"`
+	SensorTypeCode string `json:"sensor_type_code"`
 	SensorCategory string `json:"sensor_category"`
-	Location   string `json:"location"`
-	Enabled    *bool  `json:"enabled"`
+	Enabled        *bool  `json:"enabled"`
 }
 
 type targetConfig struct {
@@ -302,8 +304,10 @@ func loadTargets(path string) (map[string]targetDevice, error) {
 	for _, device := range config.Devices {
 		device.MAC = strings.ToLower(strings.TrimSpace(device.MAC))
 		device.Label = strings.TrimSpace(device.Label)
-		device.SensorCategory = strings.TrimSpace(device.SensorCategory)
 		device.Location = strings.TrimSpace(device.Location)
+		device.IngestSource = strings.TrimSpace(device.IngestSource)
+		device.SensorTypeCode = strings.TrimSpace(device.SensorTypeCode)
+		device.SensorCategory = strings.TrimSpace(device.SensorCategory)
 		if device.MAC == "" {
 			return nil, errors.New("sensor mac is required")
 		}
@@ -738,15 +742,25 @@ func (agg *aggregate) empty() bool {
 
 func ensureDevices(ctx context.Context, db *pgx.Conn, targets map[string]targetDevice) error {
 	for _, target := range targets {
+		ingestSource := strings.TrimSpace(target.IngestSource)
+		if ingestSource == "" {
+			ingestSource = "ble"
+		}
+		sensorCategory := strings.TrimSpace(target.SensorCategory)
+		if sensorCategory == "" {
+			sensorCategory = "environment"
+		}
 		_, err := db.Exec(ctx, `
-			INSERT INTO devices (mac, label, sensor_category, location)
-			VALUES ($1, $2, $3, $4)
+			INSERT INTO devices (mac, label, location, ingest_source, sensor_type_code, sensor_category)
+			VALUES ($1, $2, $3, NULLIF($4, ''), NULLIF($5, ''), NULLIF($6, ''))
 			ON CONFLICT (mac) DO UPDATE SET
 				label = EXCLUDED.label,
-				sensor_category = EXCLUDED.sensor_category,
 				location = EXCLUDED.location,
+				ingest_source = COALESCE(EXCLUDED.ingest_source, devices.ingest_source),
+				sensor_type_code = COALESCE(EXCLUDED.sensor_type_code, devices.sensor_type_code),
+				sensor_category = COALESCE(EXCLUDED.sensor_category, devices.sensor_category),
 				updated_at = now()
-		`, target.MAC, target.Label, target.SensorCategory, target.Location)
+		`, target.MAC, target.Label, target.Location, ingestSource, strings.TrimSpace(target.SensorTypeCode), sensorCategory)
 		if err != nil {
 			return err
 		}

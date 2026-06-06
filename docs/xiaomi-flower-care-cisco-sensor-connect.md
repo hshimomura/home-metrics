@@ -318,9 +318,8 @@ The current implementation includes:
    - `sensor_minute` upserts use the same sparse
      `COALESCE(EXCLUDED.value, sensor_minute.value)` pattern as existing
      advertisement fields.
-   - Device upsert currently uses the legacy `sensor_category` field from the
-     sensor configuration. The metadata split described below is the target
-     migration, not the current collector behavior.
+   - Device upsert uses explicit `ingest_source`, `sensor_type_code`, and
+     `sensor_category` metadata from the sensor configuration.
 
 3. Xiaomi `FE95` advertisement decoding.
    - `serviceDataFromAdvertisement` extracts UUID `0xfe95`.
@@ -397,10 +396,9 @@ The first configured Flower Care target is:
 }
 ```
 
-## Target Metadata Migration
+## Device Metadata
 
-The current collector still writes the legacy `sensor_category` field. The target
-metadata model is:
+The collector writes explicit device metadata:
 
 ```text
 ingest_source: cisco_sensor_connect
@@ -408,21 +406,15 @@ sensor_type_code: xiaomi_flower_care
 sensor_category: plant
 ```
 
-Implement the metadata migration in this order:
-
-1. Add `sensor_types` and device metadata columns.
-2. Update the Cisco Sensor Connect collector to read and upsert the new fields.
-3. Expose the fields from `/api/devices` and `/api/devices/{mac}/latest`.
-4. Backfill Flower Care devices with `sensor_category = plant`.
-5. Move RoomPlus and Grafana filters to `sensor_category`.
-6. Keep `sensor_category` as a legacy/display field until all clients have moved.
+`sensor_types` stores the user-facing display name and model metadata. The
+`devices.sensor_category` column was removed after RoomPlus and Grafana moved to
+`sensor_category`.
 
 ## Device Metadata and User-Facing Semantics
 
 Use a plant-specific label for Flower Care devices so users do not confuse soil
-moisture with room humidity. Do not encode this classification in `sensor_category`.
-The previous plant-specific `sensor_category` value mixed the transport path and
-sensor category and should not be used by new clients.
+moisture with room humidity. Do not encode this classification in labels or
+transport names.
 
 `ingest_source` identifies the transport and deployment path.
 `sensor_type_code` identifies the concrete decoder/model family.
