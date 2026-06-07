@@ -213,7 +213,9 @@ to wall-clock minutes, and upserts the sparse points into `sensor_minute` withou
 overwriting existing non-null advertisement values. History backfill defaults to
 off and should stay conservative because connected GATT can pause advertisements
 while the session is open. GATT control sessions are serialized inside the
-collector so battery and history reads do not overlap.
+collector so battery and history reads do not overlap. The collector does not
+clear on-device Flower Care history; sensor-side history cleanup is left to the
+official smartphone app sync path.
 
 See
 [docs/xiaomi-flower-care-cisco-sensor-connect.md](docs/xiaomi-flower-care-cisco-sensor-connect.md)

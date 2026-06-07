@@ -109,7 +109,8 @@ read. When `history_backfill` is explicitly enabled in the same block, the
 collector reads Flower Care history entries through short one-entry GATT
 sessions and upserts sparse hourly points into `sensor_minute` without
 overwriting non-null advertisement values. Flower Care real-time GATT reads and
-firmware storage are not part of the operational model.
+firmware storage are not part of the operational model. The collector also does
+not clear on-device history; that cleanup remains tied to smartphone app sync.
 `/api/devices/{mac}/latest` now builds a metric-level latest snapshot: `values`
 contains the latest non-null value for each metric, and `value_timestamps`
 records the measurement timestamp for metrics that have a value. This keeps

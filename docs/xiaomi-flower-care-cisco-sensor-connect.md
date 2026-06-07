@@ -315,6 +315,12 @@ Operational notes from the probe:
   fails after at least one successful entry, return partial readings and keep a
   stop reason for logging instead of silently treating every stop as a clean
   success.
+- Public reverse-engineering notes describe a history clear command: write
+  `a2 00 00` to the history command characteristic after a successful sync. The
+  collector intentionally does not implement or send this command. Sensor-side
+  history cleanup remains the responsibility of the official smartphone app,
+  because syncing through that app clears the on-device history. `home-metrics`
+  treats GATT history as read-only auxiliary backfill data.
 
 ## Current Advertisement Decode
 
@@ -509,6 +515,11 @@ The current implementation includes:
    - Production history backfill is wired into the same low-frequency GATT
      poller as battery polling and runs only when `history_backfill` is true for
      the device.
+   - Sensor-side history deletion is intentionally not implemented. Although the
+     known protocol can mark historical data as synchronized by writing
+     `a2 00 00` to `1a10`, `home-metrics` keeps GATT history read-only and relies
+     on the smartphone app to clear device history when the app performs its own
+     sync.
    - Keep limits conservative: one device at a time, short timeouts, random
      jitter, and a maximum history entry count. The FlowerCareESP32 reference
      notes that long history reads may lose the BLE connection after roughly
