@@ -104,9 +104,12 @@ metrics.
 Flower Care battery can be polled through Cisco Sensor Connect GATT control when
 `gatt_battery` is configured for a device. The poller defaults to one read every
 24 hours plus or minus 30 minutes, requires a recent advertisement before
-connecting, stores only `battery_percent`, and disconnects immediately after the
-read. Flower Care real-time GATT reads, history reads, and firmware storage are
-not part of the operational model.
+connecting, stores `battery_percent`, and disconnects immediately after the
+read. When `history_backfill` is explicitly enabled in the same block, the
+collector reads Flower Care history entries through short one-entry GATT
+sessions and upserts sparse hourly points into `sensor_minute` without
+overwriting non-null advertisement values. Flower Care real-time GATT reads and
+firmware storage are not part of the operational model.
 `/api/devices/{mac}/latest` now builds a metric-level latest snapshot: `values`
 contains the latest non-null value for each metric, and `value_timestamps`
 records the measurement timestamp for metrics that have a value. This keeps

@@ -41,15 +41,14 @@ This means there are two practical paths:
   advertisement data is incomplete or encrypted
 
 `home-metrics` uses the advertisement path for the primary plant measurements.
-GATT reads are used only as optional low-frequency auxiliary polling for battery
-level. A GATT read requires a BLE connection, characteristic read/write
-operations, and disconnect handling, which can increase sensor battery usage and
-consume AP BLE connection slots. For this reason, the production collector does
-not use GATT for temperature, illuminance, soil moisture, conductivity, or
-history.
+GATT reads are used only as optional low-frequency auxiliary polling. A GATT
+read requires a BLE connection, characteristic read/write operations, and
+disconnect handling, which can increase sensor battery usage, consume AP BLE
+connection slots, and pause normal advertisements while connected.
 
-History GATT reads are out of scope and should not be needed when the beacon
-stream is received reliably.
+The production collector uses GATT for battery and can optionally use Flower
+Care history reads to fill small gaps. GATT real-time reads are still diagnostic
+only. Advertisement telemetry remains the source of truth when it is available.
 
 ## Cisco Sensor Connect Fit
 
@@ -136,9 +135,21 @@ The connected GATT path has also been validated through Cisco Sensor Connect:
    `00001a02-0000-1000-8000-00805f9b34fb`.
 6. Disconnect after read to minimize battery impact and AP connection slot use.
 
-The production collector implements only the connect, battery read, and
-disconnect portion as scheduled battery polling. It does not write `a0 1f`, does
-not read real-time data from `1a01`, and does not read history data.
+The production collector implements the connect, battery read, and disconnect
+portion as scheduled battery polling. If `history_backfill` is explicitly
+enabled for the device, the same low-frequency poll also reads Flower Care
+history through service `1206` using one short connection per entry and backfills
+sparse history points into `sensor_minute`. It does not write `a0 1f` or read
+real-time data from `1a01` in production.
+
+On 2026-06-07, a local probe in `tools/flowercare_gatt_probe.go` confirmed that
+Cisco Sensor Connect can read `Blueberry1` battery, firmware, real-time plant
+values, device epoch, history count, and individual history entries. The stable
+pattern is to use a short history-only connection and read one entry per
+connection. The first entry is selected with `a1 01 00`, the second with
+`a1 02 00`, and so on. Trying to read multiple entries in one connection was
+less reliable, and concurrent control API calls are rejected by Cisco Sensor
+Connect.
 
 ## BLE UUIDs and GATT Characteristics
 
@@ -151,13 +162,14 @@ Known UUIDs from public MiFlora/Flower Care implementations:
 | mode / command characteristic | `00001a00-0000-1000-8000-00805f9b34fb` |
 | real-time sensor data characteristic | `00001a01-0000-1000-8000-00805f9b34fb` |
 | battery and firmware characteristic | `00001a02-0000-1000-8000-00805f9b34fb` |
-| history data service, not used initially | `00001206-0000-1000-8000-00805f9b34fb` |
-| history command characteristic, not used initially | `00001a10-0000-1000-8000-00805f9b34fb` |
-| history data characteristic, not used initially | `00001a11-0000-1000-8000-00805f9b34fb` |
-| device epoch characteristic, not used initially | `00001a12-0000-1000-8000-00805f9b34fb` |
+| history data service | `00001206-0000-1000-8000-00805f9b34fb` |
+| history command characteristic | `00001a10-0000-1000-8000-00805f9b34fb` |
+| history data characteristic | `00001a11-0000-1000-8000-00805f9b34fb` |
+| device epoch characteristic | `00001a12-0000-1000-8000-00805f9b34fb` |
 
 History reads are not required when `home-metrics` continuously stores received
-beacon data.
+beacon data. They are available as an explicit, low-frequency backfill path for
+small gaps caused by a temporary GATT connection or missed advertisements.
 
 ## GATT Decode Reference
 
@@ -208,6 +220,101 @@ Decode:
 
 The production collector stores only the battery percentage. Firmware is logged
 for troubleshooting and is not stored in the database.
+
+History uses service `1206`. The protocol below is based on
+`SusanneThroner/FlowerCareESP32` and the live `Blueberry1` probe:
+
+1. Read the device epoch from characteristic `1a12`.
+2. Write history init command `a0 00 00` to characteristic `1a10`.
+3. Read characteristic `1a11`; bytes `00-01` are the history entry count as a
+   little-endian `uint16`.
+4. Select an entry by writing `a1 <index little-endian uint16>` to
+   characteristic `1a10`.
+5. Read the selected 16-byte entry from characteristic `1a11`.
+
+The history entry payload is decoded as:
+
+| Bytes | Type | Meaning |
+| --- | --- | --- |
+| `00-03` | uint32 little-endian | device timestamp seconds |
+| `04-05` | int16 little-endian, divide by 10 | temperature C |
+| `06` | unknown | ignore |
+| `07-10` | uint32 little-endian | illuminance lux |
+| `11` | uint8 | soil moisture percent |
+| `12-13` | uint16 little-endian | conductivity uS/cm |
+| `14-15` | unknown | ignore |
+
+Because the history timestamp is relative to the Flower Care device epoch, map
+it to wall-clock time at read time:
+
+```text
+entry_time = host_read_time - (device_epoch_now - entry_device_timestamp)
+```
+
+GATT history has second-level timestamps on the device. `home-metrics` stores
+sensor data in `sensor_minute`, so truncate the resulting wall-clock timestamp
+to the minute before inserting it.
+
+Even though Flower Care history appears to be hourly, `home-metrics` keeps plant
+readings in `sensor_minute` for now. Other APIs and dashboards already consume
+that table, passive BLE advertisement scanning does not increase the sensor's
+power draw, and using one common time-series table keeps latest and series
+semantics consistent. GATT history backfill therefore adds sparse hourly points
+into the minute table instead of creating a separate plant-history table.
+
+The live probe result for `Blueberry1` on 2026-06-07:
+
+```text
+battery raw: 64 39 33 2e 33 2e 36
+battery: 100%
+firmware: 3.3.6
+real-time raw: ed 00 03 d3 10 00 00 1a 17 01 02 3c 00 fb 34 9b
+real-time decoded: 23.7 C, 4307 lux, 26%, 279 uS/cm
+device epoch: 66815 seconds
+history init raw: 02 00 2e 8c d6 13 08 00 d8 15 08 00 00 00 00 00
+history count: 2
+history entry 1 raw: 20 fd 00 00 ee 00 03 86 10 00 00 1a 19 01 00 00
+history entry 1 decoded: 2026-06-07 11:58 JST, 23.8 C, 4230 lux, 26%, 281 uS/cm
+history entry 2 raw: 10 ef 00 00 eb 00 03 c2 10 00 00 1a 1d 01 00 00
+history entry 2 decoded: 2026-06-07 10:58 JST, 23.5 C, 4290 lux, 26%, 285 uS/cm
+history entry 3 raw: ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff
+history entry 3 decoded: invalid empty sentinel, do not ingest
+```
+
+The GATT data granularity is therefore:
+
+- battery/firmware: one sparse point at the poll time
+- real-time plant data: one current point at the poll time
+- history plant data: one or more device-timestamped entries with second-level
+  source timestamps, stored in `sensor_minute` at minute granularity
+
+Operational notes from the probe:
+
+- Use `history-only` GATT sessions for history reads. Battery and real-time reads
+  can be done in a separate session.
+- Use one connection per history entry: connect to service `1206`, read epoch,
+  write init, read count, write the entry selector, read entry data, disconnect.
+- Populate full device metadata on every history reading before backfill:
+  `SensorMAC`, `Label`, `Location`, `IngestSource`, `SensorTypeCode`, and
+  `SensorCategory`. `sensor_minute` upsert requires `SensorMAC`, and carrying
+  the rest keeps poller wiring safe.
+- Do not run GATT sessions in parallel inside the same collector process. Cisco
+  Sensor Connect returned `No more than one API at a time` when two probes were
+  started concurrently. The collector has a `ControlMu` mutex in `config`, and
+  battery/history helpers hold it across the full connect, read/write, and
+  disconnect sequence so battery, real-time, and history sessions cannot
+  interleave.
+- A longer read delay is not always safer. A 3-second delay caused Cisco Sensor
+  Connect to report that the device was already disconnected. A 1-second delay
+  worked for the successful entry reads.
+- Treat all-`ff` entries or entries with a device timestamp greater than the
+  current device epoch as invalid sentinel rows.
+- Stop before reading past the reported history count. If the count is `0`, or
+  the requested entry index is greater than the count, return a clean empty
+  result without sending an entry selector such as `a1 01 00`. If a later entry
+  fails after at least one successful entry, return partial readings and keep a
+  stop reason for logging instead of silently treating every stop as a clean
+  success.
 
 ## Current Advertisement Decode
 
@@ -375,6 +482,56 @@ The current implementation includes:
    - GATT polling failures are logged but do not mark the MQTT collector as
      unhealthy, because this is auxiliary telemetry.
 
+8. GATT real-time decode and history backfill.
+   - The collector has decode helpers for Flower Care real-time GATT payloads
+     from `1204/1a01` and history entries from `1206/1a11`.
+   - The collector also has a shared PostgreSQL `sensor_minute` upsert helper for
+     GATT backfill rows. It uses the same `ON CONFLICT (ts, mac)` and
+     `COALESCE(EXCLUDED.metric, sensor_minute.metric)` pattern as advertisement
+     ingest, so a GATT row can fill missing values without overwriting existing
+     advertisement values.
+   - History timestamps are mapped from device seconds to wall-clock time with
+     the device epoch read from `1a12`, then truncated to the minute for
+     `sensor_minute`.
+   - A standalone probe, `tools/flowercare_gatt_probe.go`, can confirm Cisco
+     Sensor Connect GATT behavior without writing to PostgreSQL.
+   - The live Cisco control API history entry read works when each entry is read
+     through an independent history-only connection. This is reflected in
+     `readGATTFlowerCareHistory`, which opens one short connection per entry.
+   - `readGATTFlowerCareHistory` receives the full `targetDevice`, not only the
+     GATT device ID, so returned readings are ready for `sensor_minute` backfill.
+   - The helper stops before requesting an entry beyond the reported history
+     count, treats count `0` as a clean empty history, and records partial-stop
+     reasons for later logging.
+   - GATT control sessions are serialized through `config.ControlMu` across the
+     full connect, read/write, and disconnect sequence; keep this requirement
+     when wiring battery, real-time, and history polling together.
+   - Production history backfill is wired into the same low-frequency GATT
+     poller as battery polling and runs only when `history_backfill` is true for
+     the device.
+   - Keep limits conservative: one device at a time, short timeouts, random
+     jitter, and a maximum history entry count. The FlowerCareESP32 reference
+     notes that long history reads may lose the BLE connection after roughly
+     110 entries.
+
+The relevant `gatt_battery` config shape is:
+
+```json
+{
+  "gatt": {
+    "enabled": true,
+    "device_id": "48c71db0-ce81-43c2-849f-5da7fef23ec4",
+    "poll_interval": "24h",
+    "jitter": "30m",
+    "advertisement_max_age": "10m",
+    "battery": true,
+    "realtime": true,
+    "history_backfill": false,
+    "max_history_entries": 24
+  }
+}
+```
+
 The first configured Flower Care target is:
 
 ```json
@@ -391,7 +548,9 @@ The first configured Flower Care target is:
     "characteristic_id": "00001a02-0000-1000-8000-00805f9b34fb",
     "poll_interval": "24h",
     "jitter": "30m",
-    "advertisement_max_age": "10m"
+    "advertisement_max_age": "10m",
+    "history_backfill": false,
+    "max_history_entries": 24
   }
 }
 ```
@@ -451,6 +610,7 @@ The Flower Care support touches:
 
 - `cmd/hm-cisco-iot-orchestrator-collector/main.go`
 - `cmd/hm-cisco-iot-orchestrator-collector/main_test.go`
+- `tools/flowercare_gatt_probe.go`
 - `db/schema.sql`
 - `db/migrations/0012_add_plant_sensor_metrics.sql`
 - `cmd/hm-db-maint/main.go`
@@ -473,6 +633,38 @@ Implemented decoder test fixtures:
   `5a2b332e322e32`
 - a real Cisco Sensor Connect GATT battery/firmware response from `Blueberry1`:
   `6439332e332e36`, decoded as `battery_percent=100` and firmware `3.3.6`
+- a real Cisco Sensor Connect GATT real-time response from `Blueberry1`:
+  `ed0003d31000001a1701023c00fb349b`, decoded as `23.7 C`, `4307 lux`,
+  `26%`, and `279 uS/cm`
+- a FlowerCareESP32 history entry response:
+  `a0224c00140100e90300000528000000`, decoded as device timestamp `4989600`,
+  `27.6 C`, `1001 lux`, `5%`, and `40 uS/cm`
+- real Cisco Sensor Connect history entries from `Blueberry1`:
+  - entry `1`, `20fd0000ee0003861000001a19010000`, decoded as `2026-06-07
+    11:58 JST`, `23.8 C`, `4230 lux`, `26%`, and `281 uS/cm`
+  - entry `2`, `10ef0000eb0003c21000001a1d010000`, decoded as `2026-06-07
+    10:58 JST`, `23.5 C`, `4290 lux`, `26%`, and `285 uS/cm`
+  - entry `3`, `ffffffffffffffffffffffffffffffff`, rejected as an invalid sentinel
+- GATT history read sequencing:
+  `readGATTFlowerCareHistory` sends `a00000`, then `a10100`, disconnects, and
+  repeats with `a00000`, `a10200` for the next entry
+- PostgreSQL missing-data backfill behavior:
+  `backfillSensorMinuteReadings` inserts minute-truncated GATT readings into
+  `sensor_minute` and preserves existing non-null values with `COALESCE` during
+  conflicts
+
+Validation run on 2026-06-07:
+
+```sh
+go test ./...
+GO111MODULE=off go build -o /tmp/flowercare-gatt-probe ./tools/flowercare_gatt_probe.go
+```
+
+Both commands completed successfully. The live `Blueberry1` probe confirmed
+battery, firmware, real-time data, device epoch, history count, and two valid
+history entries. Production backfill remains opt-in through `history_backfill`
+because connected GATT pauses advertisements and Cisco control API calls must be
+serialized.
 
 ## Open Questions
 
@@ -483,7 +675,11 @@ Implemented decoder test fixtures:
   than the default 30-minute jitter?
 - Should firmware be stored in a device metadata table later, or is logging it
   during battery polling sufficient?
-- Is advertisement-only operation sufficient for plant monitoring long term?
+- Should automated production history backfill become adaptive and stop after
+  the newest already-stored history minute is found, instead of always walking up
+  to `max_history_entries`?
+- Is advertisement plus opt-in history backfill sufficient for plant monitoring,
+  or should production eventually add a separate real-time GATT poll mode?
 - Should future plant-specific metadata, such as plant name, pot location, and
   watering threshold, live in `devices` or in a separate plant table?
 

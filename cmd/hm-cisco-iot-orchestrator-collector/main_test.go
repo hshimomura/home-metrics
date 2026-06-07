@@ -9,9 +9,14 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
+
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 func TestDecodeDataBatchWithServiceData(t *testing.T) {
@@ -244,6 +249,185 @@ func TestCollectorAggregatesSparseFlowerCareAdvertisements(t *testing.T) {
 	}
 }
 
+func TestDecodeFlowerCareRealtimeGATT(t *testing.T) {
+	got, err := decodeFlowerCareRealtimeGATT(mustHex(t, "ed0003d31000001a1701023c00fb349b"))
+	if err != nil {
+		t.Fatalf("decodeFlowerCareRealtimeGATT: %v", err)
+	}
+	if got.TemperatureC == nil || *got.TemperatureC != 23.7 {
+		t.Fatalf("temperature=%v, want 23.7", got.TemperatureC)
+	}
+	if got.Lux == nil || *got.Lux != 4307 {
+		t.Fatalf("lux=%v, want 4307", got.Lux)
+	}
+	if got.SoilMoisturePercent == nil || *got.SoilMoisturePercent != 26 {
+		t.Fatalf("soil moisture=%v, want 26", got.SoilMoisturePercent)
+	}
+	if got.ConductivityUSCM == nil || *got.ConductivityUSCM != 279 {
+		t.Fatalf("conductivity=%v, want 279", got.ConductivityUSCM)
+	}
+}
+
+func TestDecodeFlowerCareHistoryGATTMapsSecondsToMinute(t *testing.T) {
+	hostReadTime := time.Date(2026, 6, 7, 12, 32, 30, 0, time.UTC)
+	got, err := decodeFlowerCareHistoryGATT(
+		mustHex(t, "a0224c00140100e90300000528000000"),
+		4990145,
+		hostReadTime,
+	)
+	if err != nil {
+		t.Fatalf("decodeFlowerCareHistoryGATT: %v", err)
+	}
+	wantTS := time.Date(2026, 6, 7, 12, 23, 0, 0, time.UTC)
+	if !got.TS.Equal(wantTS) {
+		t.Fatalf("timestamp=%s, want %s", got.TS, wantTS)
+	}
+	if got.TemperatureC == nil || *got.TemperatureC != 27.6 {
+		t.Fatalf("temperature=%v, want 27.6", got.TemperatureC)
+	}
+	if got.Lux == nil || *got.Lux != 1001 {
+		t.Fatalf("lux=%v, want 1001", got.Lux)
+	}
+	if got.SoilMoisturePercent == nil || *got.SoilMoisturePercent != 5 {
+		t.Fatalf("soil moisture=%v, want 5", got.SoilMoisturePercent)
+	}
+	if got.ConductivityUSCM == nil || *got.ConductivityUSCM != 40 {
+		t.Fatalf("conductivity=%v, want 40", got.ConductivityUSCM)
+	}
+}
+
+func TestDecodeFlowerCareHistoryGATTRejectsEmptySentinel(t *testing.T) {
+	_, err := decodeFlowerCareHistoryGATT(
+		mustHex(t, "ffffffffffffffffffffffffffffffff"),
+		68760,
+		time.Date(2026, 6, 7, 13, 4, 54, 0, time.UTC),
+	)
+	if err == nil {
+		t.Fatal("decodeFlowerCareHistoryGATT error = nil, want invalid sentinel error")
+	}
+	if !strings.Contains(err.Error(), "exceeds device epoch") {
+		t.Fatalf("error=%v, want exceeds device epoch", err)
+	}
+}
+
+type fakeSensorMinuteExecer struct {
+	sql   []string
+	args  [][]any
+	err   error
+	calls int
+}
+
+func (f *fakeSensorMinuteExecer) Exec(_ context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
+	f.calls++
+	f.sql = append(f.sql, sql)
+	f.args = append(f.args, args)
+	if f.err != nil {
+		return pgconn.CommandTag{}, f.err
+	}
+	return pgconn.NewCommandTag("INSERT 0 1"), nil
+}
+
+func TestBackfillSensorMinuteReadingsUsesPostgresUpsertForMissingMetrics(t *testing.T) {
+	db := &fakeSensorMinuteExecer{}
+	ts := time.Date(2026, 6, 7, 12, 23, 25, 0, time.UTC)
+	inserted, err := backfillSensorMinuteReadings(context.Background(), db, []bleReading{
+		{
+			TS:                  ts,
+			SensorMAC:           "5c:85:7e:14:73:7d",
+			TemperatureC:        floatPtr(27.6),
+			Lux:                 floatPtr(1001),
+			SoilMoisturePercent: floatPtr(5),
+			ConductivityUSCM:    floatPtr(40),
+		},
+		{
+			TS:        ts.Add(time.Minute),
+			SensorMAC: "5c:85:7e:14:73:7d",
+		},
+	})
+	if err != nil {
+		t.Fatalf("backfillSensorMinuteReadings: %v", err)
+	}
+	if inserted != 1 || db.calls != 1 {
+		t.Fatalf("inserted=%d calls=%d, want 1/1", inserted, db.calls)
+	}
+	sql := db.sql[0]
+	for _, want := range []string{
+		"INSERT INTO sensor_minute",
+		"ON CONFLICT (ts, mac) DO UPDATE SET",
+		"temperature_c = COALESCE(EXCLUDED.temperature_c, sensor_minute.temperature_c)",
+		"lux = COALESCE(EXCLUDED.lux, sensor_minute.lux)",
+		"soil_moisture_percent = COALESCE(EXCLUDED.soil_moisture_percent, sensor_minute.soil_moisture_percent)",
+		"conductivity_us_cm = COALESCE(EXCLUDED.conductivity_us_cm, sensor_minute.conductivity_us_cm)",
+	} {
+		if !strings.Contains(sql, want) {
+			t.Fatalf("SQL missing %q:\n%s", want, sql)
+		}
+	}
+	args := db.args[0]
+	if got, ok := args[0].(time.Time); !ok || !got.Equal(ts.Truncate(time.Minute)) {
+		t.Fatalf("timestamp arg=%#v, want minute-truncated %s", args[0], ts.Truncate(time.Minute))
+	}
+	if args[1] != "5c:85:7e:14:73:7d" {
+		t.Fatalf("mac arg=%#v", args[1])
+	}
+	if args[2] == nil || args[8] == nil || args[10] == nil || args[11] == nil {
+		t.Fatalf("plant metric args missing: %#v", args)
+	}
+	if args[3] != nil || args[4] != nil || args[5] != nil {
+		t.Fatalf("non-GATT metrics should remain nil for sparse backfill: %#v", args)
+	}
+}
+
+func TestLoadTargetsParsesFlowerCareHistoryBackfillConfig(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "sensors.json")
+	if err := os.WriteFile(path, []byte(`{
+		"devices": [{
+			"mac": "5C:85:7E:14:73:7D",
+			"label": "Blueberry1",
+			"ingest_source": "cisco_sensor_connect",
+			"sensor_type_code": "xiaomi_flower_care",
+			"gatt_battery": {
+				"enabled": true,
+				"device_id": "device-1",
+				"history_backfill": true,
+				"max_history_entries": 12
+			}
+		}]
+	}`), 0o600); err != nil {
+		t.Fatalf("write sensors config: %v", err)
+	}
+
+	targets, err := loadTargets(path)
+	if err != nil {
+		t.Fatalf("loadTargets: %v", err)
+	}
+	target := targets["5c:85:7e:14:73:7d"]
+	if target.GATTBattery == nil {
+		t.Fatal("GATT battery config not parsed")
+	}
+	if !gattHistoryBackfillEnabled(target) {
+		t.Fatal("history backfill should be enabled")
+	}
+	if got := gattHistoryMaxEntries(target); got != 12 {
+		t.Fatalf("max history entries=%d, want 12", got)
+	}
+	if target.SensorCategory != "plant" {
+		t.Fatalf("sensor category=%q, want plant", target.SensorCategory)
+	}
+}
+
+func TestGATTHistoryBackfillDefaultsDisabledAndConservativeLimit(t *testing.T) {
+	target := targetDevice{
+		GATTBattery: &gattBatteryConfig{DeviceID: "device-1"},
+	}
+	if gattHistoryBackfillEnabled(target) {
+		t.Fatal("history backfill should default to disabled")
+	}
+	if got := gattHistoryMaxEntries(target); got != defaultGATTHistoryEntries {
+		t.Fatalf("max history entries=%d, want %d", got, defaultGATTHistoryEntries)
+	}
+}
+
 func TestNormalizeSensorMetadataDefaultsFlowerCareCategory(t *testing.T) {
 	if got := normalizeIngestSource(""); got != sensorConnectIngestSource {
 		t.Fatalf("ingest source=%q, want %q", got, sensorConnectIngestSource)
@@ -435,6 +619,274 @@ func TestReadGATTBatteryConnectsReadsAndDisconnects(t *testing.T) {
 	}
 	if readBLE["characteristicID"] != "00001a02-0000-1000-8000-00805f9b34fb" {
 		t.Fatalf("read characteristicID=%#v", readBLE["characteristicID"])
+	}
+}
+
+func TestReadGATTFlowerCareHistoryReadsOneEntryPerConnection(t *testing.T) {
+	var paths []string
+	var writes []string
+	entry := 0
+	originalDo := doHTTPRequest
+	t.Cleanup(func() { doHTTPRequest = originalDo })
+	doHTTPRequest = func(cfg config, r *http.Request) (*http.Response, error) {
+		paths = append(paths, r.URL.Path)
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode request body: %v", err)
+		}
+		response := `{"status":"SUCCESS","id":"device-1"}`
+		switch r.URL.Path {
+		case "/control/connectivity/connect", "/control/connectivity/disconnect":
+		case "/control/data/write":
+			value, _ := body["value"].(string)
+			writes = append(writes, value)
+		case "/control/data/read":
+			ble, _ := body["ble"].(map[string]any)
+			characteristicID, _ := ble["characteristicID"].(string)
+			switch characteristicID {
+			case flowerCareEpoch:
+				response = `{"status":"SUCCESS","id":"device-1","value":"a1644c00"}`
+			case flowerCareHistoryData:
+				if len(writes) == 0 || writes[len(writes)-1] == "a00000" {
+					response = `{"status":"SUCCESS","id":"device-1","value":"02000000000000000000000000000000"}`
+				} else {
+					entry++
+					if entry == 1 {
+						response = `{"status":"SUCCESS","id":"device-1","value":"a0224c00140100e90300000528000000"}`
+					} else {
+						response = `{"status":"SUCCESS","id":"device-1","value":"90624c00ee0003861000001a19010000"}`
+					}
+				}
+			default:
+				t.Fatalf("unexpected read characteristic=%s", characteristicID)
+			}
+		default:
+			t.Fatalf("unexpected path=%s", r.URL.Path)
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Status:     "200 OK",
+			Body:       io.NopCloser(strings.NewReader(response)),
+		}, nil
+	}
+
+	result, err := readGATTFlowerCareHistory(context.Background(), config{
+		APIURL:        "https://orchestrator.example",
+		ControlAppID:  "control",
+		ControlAPIKey: "key",
+	}, targetDevice{
+		MAC:            "5c:85:7e:14:73:7d",
+		Label:          "Blueberry1",
+		Location:       "Blueberry1",
+		IngestSource:   sensorConnectIngestSource,
+		SensorTypeCode: "xiaomi_flower_care",
+		SensorCategory: "plant",
+		GATTBattery:    &gattBatteryConfig{DeviceID: "device-1"},
+	}, 3)
+	if err != nil {
+		t.Fatalf("readGATTFlowerCareHistory: %v", err)
+	}
+	readings := result.Readings
+	if len(readings) != 2 {
+		t.Fatalf("readings=%d, want 2", len(readings))
+	}
+	if strings.Join(writes, ",") != "a00000,a10100,a00000,a10200" {
+		t.Fatalf("writes=%v", writes)
+	}
+	if result.Count != 2 {
+		t.Fatalf("history count=%d, want 2", result.Count)
+	}
+	if result.StopReason != "" {
+		t.Fatalf("stop reason=%q, want empty", result.StopReason)
+	}
+	if readings[0].SensorMAC != "5c:85:7e:14:73:7d" ||
+		readings[0].Label != "Blueberry1" ||
+		readings[0].IngestSource != sensorConnectIngestSource ||
+		readings[0].SensorTypeCode != "xiaomi_flower_care" ||
+		readings[0].SensorCategory != "plant" {
+		t.Fatalf("metadata not populated: %#v", readings[0])
+	}
+	if got := readings[0].TemperatureC; got == nil || *got != 27.6 {
+		t.Fatalf("entry1 temperature=%v, want 27.6", got)
+	}
+	if got := readings[1].TemperatureC; got == nil || *got != 23.8 {
+		t.Fatalf("entry2 temperature=%v, want 23.8", got)
+	}
+	connects := 0
+	for _, path := range paths {
+		if path == "/control/connectivity/connect" {
+			connects++
+		}
+	}
+	if connects != 2 {
+		t.Fatalf("connects=%d, want one per entry; paths=%v", connects, paths)
+	}
+}
+
+func TestReadGATTFlowerCareHistoryReturnsEmptyWhenCountZero(t *testing.T) {
+	var writes []string
+	var disconnected bool
+	originalDo := doHTTPRequest
+	t.Cleanup(func() { doHTTPRequest = originalDo })
+	doHTTPRequest = func(cfg config, r *http.Request) (*http.Response, error) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode request body: %v", err)
+		}
+		response := `{"status":"SUCCESS","id":"device-1"}`
+		switch r.URL.Path {
+		case "/control/connectivity/connect":
+		case "/control/connectivity/disconnect":
+			disconnected = true
+		case "/control/data/write":
+			value, _ := body["value"].(string)
+			writes = append(writes, value)
+		case "/control/data/read":
+			ble, _ := body["ble"].(map[string]any)
+			characteristicID, _ := ble["characteristicID"].(string)
+			switch characteristicID {
+			case flowerCareEpoch:
+				response = `{"status":"SUCCESS","id":"device-1","value":"a1644c00"}`
+			case flowerCareHistoryData:
+				response = `{"status":"SUCCESS","id":"device-1","value":"00000000000000000000000000000000"}`
+			default:
+				t.Fatalf("unexpected read characteristic=%s", characteristicID)
+			}
+		default:
+			t.Fatalf("unexpected path=%s", r.URL.Path)
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Status:     "200 OK",
+			Body:       io.NopCloser(strings.NewReader(response)),
+		}, nil
+	}
+
+	result, err := readGATTFlowerCareHistory(context.Background(), config{
+		APIURL:        "https://orchestrator.example",
+		ControlAppID:  "control",
+		ControlAPIKey: "key",
+	}, targetDevice{
+		MAC:         "5c:85:7e:14:73:7d",
+		Label:       "Blueberry1",
+		GATTBattery: &gattBatteryConfig{DeviceID: "device-1"},
+	}, 3)
+	if err != nil {
+		t.Fatalf("readGATTFlowerCareHistory: %v", err)
+	}
+	if len(result.Readings) != 0 {
+		t.Fatalf("readings=%d, want empty", len(result.Readings))
+	}
+	if result.Count != 0 {
+		t.Fatalf("history count=%d, want 0", result.Count)
+	}
+	if result.StopReason != "" {
+		t.Fatalf("stop reason=%q, want empty", result.StopReason)
+	}
+	if strings.Join(writes, ",") != "a00000" {
+		t.Fatalf("writes=%v, want init only", writes)
+	}
+	if !disconnected {
+		t.Fatal("disconnect was not called")
+	}
+}
+
+func TestReadGATTFlowerCareHistoryReturnsPartialStopReason(t *testing.T) {
+	entry := 0
+	originalDo := doHTTPRequest
+	t.Cleanup(func() { doHTTPRequest = originalDo })
+	doHTTPRequest = func(cfg config, r *http.Request) (*http.Response, error) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode request body: %v", err)
+		}
+		response := `{"status":"SUCCESS","id":"device-1"}`
+		switch r.URL.Path {
+		case "/control/connectivity/connect", "/control/connectivity/disconnect", "/control/data/write":
+		case "/control/data/read":
+			ble, _ := body["ble"].(map[string]any)
+			characteristicID, _ := ble["characteristicID"].(string)
+			switch characteristicID {
+			case flowerCareEpoch:
+				response = `{"status":"SUCCESS","id":"device-1","value":"a1644c00"}`
+			case flowerCareHistoryData:
+				entry++
+				switch entry {
+				case 1, 3:
+					response = `{"status":"SUCCESS","id":"device-1","value":"03000000000000000000000000000000"}`
+				case 2:
+					response = `{"status":"SUCCESS","id":"device-1","value":"a0224c00140100e90300000528000000"}`
+				default:
+					response = `{"status":"FAILURE","reason":"transient read failure"}`
+				}
+			default:
+				t.Fatalf("unexpected read characteristic=%s", characteristicID)
+			}
+		default:
+			t.Fatalf("unexpected path=%s", r.URL.Path)
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Status:     "200 OK",
+			Body:       io.NopCloser(strings.NewReader(response)),
+		}, nil
+	}
+
+	result, err := readGATTFlowerCareHistory(context.Background(), config{
+		APIURL:        "https://orchestrator.example",
+		ControlAppID:  "control",
+		ControlAPIKey: "key",
+	}, targetDevice{
+		MAC:         "5c:85:7e:14:73:7d",
+		Label:       "Blueberry1",
+		GATTBattery: &gattBatteryConfig{DeviceID: "device-1"},
+	}, 3)
+	if err != nil {
+		t.Fatalf("readGATTFlowerCareHistory: %v", err)
+	}
+	if len(result.Readings) != 1 {
+		t.Fatalf("readings=%d, want partial 1", len(result.Readings))
+	}
+	if !strings.Contains(result.StopReason, "entry 2") || !strings.Contains(result.StopReason, "transient read failure") {
+		t.Fatalf("stop reason=%q", result.StopReason)
+	}
+}
+
+func TestWithGATTControlSessionSerializesWholeSession(t *testing.T) {
+	cfg := config{ControlMu: &sync.Mutex{}}
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	active := 0
+	maxActive := 0
+
+	run := func() {
+		defer wg.Done()
+		if err := withGATTControlSession(cfg, func() error {
+			mu.Lock()
+			active++
+			if active > maxActive {
+				maxActive = active
+			}
+			mu.Unlock()
+
+			time.Sleep(10 * time.Millisecond)
+
+			mu.Lock()
+			active--
+			mu.Unlock()
+			return nil
+		}); err != nil {
+			t.Errorf("withGATTControlSession: %v", err)
+		}
+	}
+
+	wg.Add(2)
+	go run()
+	go run()
+	wg.Wait()
+
+	if maxActive != 1 {
+		t.Fatalf("max active sessions=%d, want 1", maxActive)
 	}
 }
 

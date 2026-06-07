@@ -27,6 +27,7 @@ import (
 	"home-metrics/internal/collectorstatus"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 const (
@@ -48,6 +49,17 @@ const (
 	defaultGATTBatteryPoll    = 24 * time.Hour
 	defaultGATTBatteryJitter  = 30 * time.Minute
 	defaultGATTAdvMaxAge      = 10 * time.Minute
+	defaultGATTHistoryEntries = 24
+	flowerCareGATTReadDelay   = time.Second
+
+	flowerCareDataService            = "1204"
+	flowerCareHistoryService         = "1206"
+	flowerCareModeCharacteristic     = "00001a00-0000-1000-8000-00805f9b34fb"
+	flowerCareRealtimeCharacteristic = "00001a01-0000-1000-8000-00805f9b34fb"
+	flowerCareBatteryCharacteristic  = "00001a02-0000-1000-8000-00805f9b34fb"
+	flowerCareHistoryCommand         = "00001a10-0000-1000-8000-00805f9b34fb"
+	flowerCareHistoryData            = "00001a11-0000-1000-8000-00805f9b34fb"
+	flowerCareEpoch                  = "00001a12-0000-1000-8000-00805f9b34fb"
 )
 
 type config struct {
@@ -72,6 +84,7 @@ type config struct {
 	PendingLog        time.Duration
 	MQTTMaxPacket     int
 	TLSSkipVerify     bool
+	ControlMu         *sync.Mutex
 }
 
 type targetDevice struct {
@@ -93,6 +106,8 @@ type gattBatteryConfig struct {
 	PollInterval        string `json:"poll_interval"`
 	Jitter              string `json:"jitter"`
 	AdvertisementMaxAge string `json:"advertisement_max_age"`
+	HistoryBackfill     *bool  `json:"history_backfill"`
+	MaxHistoryEntries   int    `json:"max_history_entries"`
 }
 
 type targetConfig struct {
@@ -151,6 +166,16 @@ type statusReporter struct {
 	mu     sync.Mutex
 	db     *pgx.Conn
 	target collectorstatus.Target
+}
+
+type sensorMinuteExecer interface {
+	Exec(context.Context, string, ...any) (pgconn.CommandTag, error)
+}
+
+type gattHistoryReadResult struct {
+	Readings   []bleReading
+	Count      uint16
+	StopReason string
 }
 
 type dataSubscription struct {
@@ -489,35 +514,263 @@ func pollGATTBattery(ctx context.Context, cfg config, target targetDevice, c *co
 		return err
 	}
 	log.Printf("stored Cisco Sensor Connect GATT battery sensor=%s battery=%d firmware=%q", target.MAC, battery, firmware)
+	if err := pollGATTHistoryBackfill(ctx, cfg, target, c.db); err != nil {
+		return err
+	}
+	return nil
+}
+
+func pollGATTHistoryBackfill(ctx context.Context, cfg config, target targetDevice, db *pgx.Conn) error {
+	if !gattHistoryBackfillEnabled(target) || db == nil {
+		return nil
+	}
+	result, err := readGATTFlowerCareHistory(ctx, cfg, target, gattHistoryMaxEntries(target))
+	if err != nil {
+		return fmt.Errorf("read Flower Care GATT history: %w", err)
+	}
+	if result.StopReason != "" {
+		log.Printf("Flower Care GATT history partial sensor=%s count=%d readings=%d reason=%s", target.MAC, result.Count, len(result.Readings), result.StopReason)
+	}
+	if len(result.Readings) == 0 {
+		log.Printf("Flower Care GATT history empty sensor=%s count=%d", target.MAC, result.Count)
+		return nil
+	}
+	if err := upsertDevice(ctx, db, target.MAC, target.Label, target.Location, target.IngestSource, target.SensorTypeCode, target.SensorCategory); err != nil {
+		return err
+	}
+	inserted, err := backfillSensorMinuteReadings(ctx, db, result.Readings)
+	if err != nil {
+		return err
+	}
+	log.Printf("stored Flower Care GATT history backfill sensor=%s count=%d readings=%d rows=%d", target.MAC, result.Count, len(result.Readings), inserted)
 	return nil
 }
 
 func readGATTBattery(ctx context.Context, cfg config, batteryCfg gattBatteryConfig) (int, string, error) {
-	baseBody := map[string]any{
-		"technology": "ble",
-		"id":         strings.TrimSpace(batteryCfg.DeviceID),
-		"controlApp": cfg.ControlAppID,
+	var battery int
+	var firmware string
+	err := withGATTControlSession(cfg, func() error {
+		baseBody := map[string]any{
+			"technology": "ble",
+			"id":         strings.TrimSpace(batteryCfg.DeviceID),
+			"controlApp": cfg.ControlAppID,
+		}
+		serviceID := gattBatteryServiceID(batteryCfg)
+		characteristicID := gattBatteryCharacteristicID(batteryCfg)
+		if _, err := controlPost(ctx, cfg, "/control/connectivity/connect", map[string]any{
+			"technology": "ble",
+			"id":         strings.TrimSpace(batteryCfg.DeviceID),
+			"controlApp": cfg.ControlAppID,
+			"ble": map[string]any{
+				"services": []map[string]string{{"serviceID": serviceID}},
+			},
+		}); err != nil {
+			return err
+		}
+		defer func() {
+			if _, err := controlPost(context.Background(), cfg, "/control/connectivity/disconnect", baseBody); err != nil {
+				log.Printf("disconnect Cisco Sensor Connect GATT device=%s: %v", strings.TrimSpace(batteryCfg.DeviceID), err)
+			}
+		}()
+		body, err := controlPost(ctx, cfg, "/control/data/read", map[string]any{
+			"technology": "ble",
+			"id":         strings.TrimSpace(batteryCfg.DeviceID),
+			"controlApp": cfg.ControlAppID,
+			"ble": map[string]any{
+				"serviceID":        serviceID,
+				"characteristicID": characteristicID,
+			},
+		})
+		if err != nil {
+			return err
+		}
+		var response struct {
+			Value string `json:"value"`
+		}
+		if err := json.Unmarshal(body, &response); err != nil {
+			return fmt.Errorf("parse GATT battery response: %w", err)
+		}
+		payload, err := decodeHexValue(response.Value)
+		if err != nil {
+			return err
+		}
+		if len(payload) < 1 {
+			return errors.New("empty GATT battery payload")
+		}
+		battery = int(payload[0])
+		if battery < 0 || battery > 100 {
+			return fmt.Errorf("GATT battery out of range: %d", battery)
+		}
+		if len(payload) >= 3 {
+			firmware = string(payload[2:])
+		}
+		return nil
+	})
+	return battery, firmware, err
+}
+
+func readGATTFlowerCareHistory(ctx context.Context, cfg config, target targetDevice, maxEntries int) (gattHistoryReadResult, error) {
+	if maxEntries <= 0 {
+		return gattHistoryReadResult{}, nil
 	}
-	serviceID := gattBatteryServiceID(batteryCfg)
-	characteristicID := gattBatteryCharacteristicID(batteryCfg)
-	if _, err := controlPost(ctx, cfg, "/control/connectivity/connect", map[string]any{
+	if target.GATTBattery == nil {
+		return gattHistoryReadResult{}, errors.New("GATT config is required")
+	}
+	result := gattHistoryReadResult{}
+	var historyCount uint16
+	for entryIndex := 1; entryIndex <= maxEntries; entryIndex++ {
+		if historyCount > 0 && entryIndex > int(historyCount) {
+			break
+		}
+		count, reading, err := readGATTFlowerCareHistoryEntry(ctx, cfg, *target.GATTBattery, entryIndex, flowerCareGATTReadDelay)
+		if err != nil {
+			result.StopReason = err.Error()
+			if entryIndex == 1 {
+				return result, err
+			}
+			log.Printf("stop Flower Care history read sensor=%s entry=%d readings=%d reason=%v", target.MAC, entryIndex, len(result.Readings), err)
+			return result, nil
+		}
+		if historyCount == 0 {
+			historyCount = count
+			result.Count = count
+		}
+		if reading == nil {
+			break
+		}
+		reading.SensorMAC = target.MAC
+		reading.Label = target.Label
+		reading.Location = strings.TrimSpace(target.Location)
+		reading.IngestSource = target.IngestSource
+		reading.SensorTypeCode = target.SensorTypeCode
+		reading.SensorCategory = target.SensorCategory
+		result.Readings = append(result.Readings, *reading)
+	}
+	return result, nil
+}
+
+func readGATTFlowerCareHistoryEntry(ctx context.Context, cfg config, batteryCfg gattBatteryConfig, entryIndex int, readDelay time.Duration) (uint16, *bleReading, error) {
+	if entryIndex <= 0 {
+		return 0, nil, fmt.Errorf("history entry index must be positive: %d", entryIndex)
+	}
+	deviceID := strings.TrimSpace(batteryCfg.DeviceID)
+	if deviceID == "" {
+		return 0, nil, errors.New("GATT device ID is required")
+	}
+	var historyCount uint16
+	var reading *bleReading
+	err := withGATTControlSession(cfg, func() error {
+		if err := controlConnect(ctx, cfg, deviceID, []string{flowerCareHistoryService}); err != nil {
+			return err
+		}
+		defer func() {
+			if err := controlDisconnect(context.Background(), cfg, deviceID); err != nil {
+				log.Printf("disconnect Cisco Sensor Connect GATT device=%s: %v", deviceID, err)
+			}
+		}()
+
+		epochPayload, err := controlRead(ctx, cfg, deviceID, flowerCareHistoryService, flowerCareEpoch)
+		if err != nil {
+			return fmt.Errorf("read Flower Care history epoch: %w", err)
+		}
+		if len(epochPayload) < 4 {
+			return fmt.Errorf("Flower Care history epoch payload too short: % x", epochPayload)
+		}
+		deviceEpoch := binary.LittleEndian.Uint32(epochPayload[:4])
+		hostReadTime := time.Now()
+
+		if err := controlWrite(ctx, cfg, deviceID, flowerCareHistoryService, flowerCareHistoryCommand, []byte{0xa0, 0x00, 0x00}); err != nil {
+			return fmt.Errorf("write Flower Care history init: %w", err)
+		}
+		waitForGATTRead(ctx, readDelay)
+		initPayload, err := controlRead(ctx, cfg, deviceID, flowerCareHistoryService, flowerCareHistoryData)
+		if err != nil {
+			return fmt.Errorf("read Flower Care history init: %w", err)
+		}
+		if len(initPayload) < 2 {
+			return fmt.Errorf("Flower Care history init payload too short: % x", initPayload)
+		}
+		historyCount = binary.LittleEndian.Uint16(initPayload[:2])
+		if historyCount == 0 || entryIndex > int(historyCount) {
+			return nil
+		}
+
+		entryCommand := []byte{0xa1, byte(entryIndex), byte(entryIndex >> 8)}
+		if err := controlWrite(ctx, cfg, deviceID, flowerCareHistoryService, flowerCareHistoryCommand, entryCommand); err != nil {
+			return fmt.Errorf("write Flower Care history entry %d: %w", entryIndex, err)
+		}
+		waitForGATTRead(ctx, readDelay)
+		entryPayload, err := controlRead(ctx, cfg, deviceID, flowerCareHistoryService, flowerCareHistoryData)
+		if err != nil {
+			return fmt.Errorf("read Flower Care history entry %d: %w", entryIndex, err)
+		}
+		decoded, err := decodeFlowerCareHistoryGATT(entryPayload, deviceEpoch, hostReadTime)
+		if err != nil {
+			return fmt.Errorf("decode Flower Care history entry %d: %w", entryIndex, err)
+		}
+		reading = &decoded
+		return nil
+	})
+	return historyCount, reading, err
+}
+
+func waitForGATTRead(ctx context.Context, delay time.Duration) {
+	if delay <= 0 {
+		return
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+	case <-timer.C:
+	}
+}
+
+func withGATTControlSession(cfg config, fn func() error) error {
+	if cfg.ControlMu == nil {
+		return fn()
+	}
+	cfg.ControlMu.Lock()
+	defer cfg.ControlMu.Unlock()
+	return fn()
+}
+
+func controlConnect(ctx context.Context, cfg config, deviceID string, services []string) error {
+	bodyServices := make([]map[string]string, 0, len(services))
+	for _, service := range services {
+		service = strings.TrimSpace(service)
+		if service == "" {
+			continue
+		}
+		bodyServices = append(bodyServices, map[string]string{"serviceID": service})
+	}
+	if len(bodyServices) == 0 {
+		return errors.New("at least one GATT service is required")
+	}
+	_, err := controlPost(ctx, cfg, "/control/connectivity/connect", map[string]any{
 		"technology": "ble",
-		"id":         strings.TrimSpace(batteryCfg.DeviceID),
+		"id":         strings.TrimSpace(deviceID),
 		"controlApp": cfg.ControlAppID,
 		"ble": map[string]any{
-			"services": []map[string]string{{"serviceID": serviceID}},
+			"services": bodyServices,
 		},
-	}); err != nil {
-		return 0, "", err
-	}
-	defer func() {
-		if _, err := controlPost(context.Background(), cfg, "/control/connectivity/disconnect", baseBody); err != nil {
-			log.Printf("disconnect Cisco Sensor Connect GATT device=%s: %v", strings.TrimSpace(batteryCfg.DeviceID), err)
-		}
-	}()
+	})
+	return err
+}
+
+func controlDisconnect(ctx context.Context, cfg config, deviceID string) error {
+	_, err := controlPost(ctx, cfg, "/control/connectivity/disconnect", map[string]any{
+		"technology": "ble",
+		"id":         strings.TrimSpace(deviceID),
+		"controlApp": cfg.ControlAppID,
+	})
+	return err
+}
+
+func controlRead(ctx context.Context, cfg config, deviceID string, serviceID string, characteristicID string) ([]byte, error) {
 	body, err := controlPost(ctx, cfg, "/control/data/read", map[string]any{
 		"technology": "ble",
-		"id":         strings.TrimSpace(batteryCfg.DeviceID),
+		"id":         strings.TrimSpace(deviceID),
 		"controlApp": cfg.ControlAppID,
 		"ble": map[string]any{
 			"serviceID":        serviceID,
@@ -525,30 +778,29 @@ func readGATTBattery(ctx context.Context, cfg config, batteryCfg gattBatteryConf
 		},
 	})
 	if err != nil {
-		return 0, "", err
+		return nil, err
 	}
 	var response struct {
 		Value string `json:"value"`
 	}
 	if err := json.Unmarshal(body, &response); err != nil {
-		return 0, "", fmt.Errorf("parse GATT battery response: %w", err)
+		return nil, err
 	}
-	payload, err := decodeHexValue(response.Value)
-	if err != nil {
-		return 0, "", err
-	}
-	if len(payload) < 1 {
-		return 0, "", errors.New("empty GATT battery payload")
-	}
-	battery := int(payload[0])
-	if battery < 0 || battery > 100 {
-		return 0, "", fmt.Errorf("GATT battery out of range: %d", battery)
-	}
-	firmware := ""
-	if len(payload) >= 3 {
-		firmware = string(payload[2:])
-	}
-	return battery, firmware, nil
+	return decodeHexValue(response.Value)
+}
+
+func controlWrite(ctx context.Context, cfg config, deviceID string, serviceID string, characteristicID string, payload []byte) error {
+	_, err := controlPost(ctx, cfg, "/control/data/write", map[string]any{
+		"technology": "ble",
+		"id":         strings.TrimSpace(deviceID),
+		"controlApp": cfg.ControlAppID,
+		"ble": map[string]any{
+			"serviceID":        serviceID,
+			"characteristicID": characteristicID,
+		},
+		"value": strings.ToLower(hex.EncodeToString(payload)),
+	})
+	return err
 }
 
 func controlPost(ctx context.Context, cfg config, path string, body map[string]any) ([]byte, error) {
@@ -616,14 +868,14 @@ func gattBatteryServiceID(cfg gattBatteryConfig) string {
 	if value := strings.TrimSpace(cfg.ServiceID); value != "" {
 		return value
 	}
-	return "1204"
+	return flowerCareDataService
 }
 
 func gattBatteryCharacteristicID(cfg gattBatteryConfig) string {
 	if value := strings.TrimSpace(cfg.CharacteristicID); value != "" {
 		return value
 	}
-	return "00001a02-0000-1000-8000-00805f9b34fb"
+	return flowerCareBatteryCharacteristic
 }
 
 func gattBatteryPollInterval(target targetDevice) time.Duration {
@@ -645,6 +897,20 @@ func gattBatteryAdvertisementMaxAge(target targetDevice) time.Duration {
 		return defaultGATTAdvMaxAge
 	}
 	return parsePositiveDuration(target.GATTBattery.AdvertisementMaxAge, defaultGATTAdvMaxAge)
+}
+
+func gattHistoryBackfillEnabled(target targetDevice) bool {
+	if !gattBatteryEnabled(target) || target.GATTBattery.HistoryBackfill == nil {
+		return false
+	}
+	return *target.GATTBattery.HistoryBackfill
+}
+
+func gattHistoryMaxEntries(target targetDevice) int {
+	if target.GATTBattery == nil || target.GATTBattery.MaxHistoryEntries <= 0 {
+		return defaultGATTHistoryEntries
+	}
+	return target.GATTBattery.MaxHistoryEntries
 }
 
 func parsePositiveDuration(value string, fallback time.Duration) time.Duration {
@@ -709,6 +975,7 @@ func loadConfig() config {
 		AggregateFlush:    envDuration("CISCO_IOT_ORCH_AGGREGATE_FLUSH_INTERVAL", defaultAggregateFlush),
 		PendingLog:        envDuration("CISCO_IOT_ORCH_PENDING_LOG_INTERVAL", defaultPendingLog),
 		TLSSkipVerify:     envBool("CISCO_IOT_ORCH_TLS_SKIP_VERIFY", true),
+		ControlMu:         &sync.Mutex{},
 	}
 }
 
@@ -1296,6 +1563,50 @@ func decodeServiceData(payloadHex string) bleReading {
 	return sanitizeReading(r)
 }
 
+func decodeFlowerCareRealtimeGATT(data []byte) (bleReading, error) {
+	if len(data) < 10 {
+		return bleReading{}, fmt.Errorf("Flower Care real-time GATT payload too short: % x", data)
+	}
+	tempRaw := int16(binary.LittleEndian.Uint16(data[0:2]))
+	reading := bleReading{
+		TemperatureC:        floatPtr(round(float64(tempRaw)/10.0, 1)),
+		Lux:                 floatPtr(float64(binary.LittleEndian.Uint32(data[3:7]))),
+		SoilMoisturePercent: floatPtr(float64(data[7])),
+		ConductivityUSCM:    floatPtr(float64(binary.LittleEndian.Uint16(data[8:10]))),
+	}
+	return sanitizeReading(reading), nil
+}
+
+func decodeFlowerCareHistoryGATT(data []byte, deviceEpoch uint32, hostReadTime time.Time) (bleReading, error) {
+	if len(data) < 14 {
+		return bleReading{}, fmt.Errorf("Flower Care history GATT payload too short: % x", data)
+	}
+	deviceTimestamp := binary.LittleEndian.Uint32(data[0:4])
+	if deviceTimestamp <= 1 {
+		return bleReading{}, fmt.Errorf("Flower Care history GATT timestamp invalid: %d raw=% x", deviceTimestamp, data)
+	}
+	if deviceTimestamp > deviceEpoch {
+		return bleReading{}, fmt.Errorf("Flower Care history GATT timestamp exceeds device epoch: timestamp=%d epoch=%d raw=% x", deviceTimestamp, deviceEpoch, data)
+	}
+	reading, err := decodeFlowerCareRealtimeGATT(append([]byte{
+		data[4], data[5], data[6],
+		data[7], data[8], data[9], data[10],
+		data[11], data[12], data[13],
+	}, data[14:]...))
+	if err != nil {
+		return bleReading{}, err
+	}
+	reading.TS = flowerCareHistoryWallTime(deviceTimestamp, deviceEpoch, hostReadTime).Truncate(time.Minute)
+	return reading, nil
+}
+
+func flowerCareHistoryWallTime(deviceTimestamp uint32, deviceEpoch uint32, hostReadTime time.Time) time.Time {
+	if deviceEpoch < deviceTimestamp {
+		return hostReadTime
+	}
+	return hostReadTime.Add(-time.Duration(deviceEpoch-deviceTimestamp) * time.Second)
+}
+
 func decodeXiaomiFE95(data []byte) bleReading {
 	r := bleReading{}
 	if len(data) < 15 {
@@ -1499,7 +1810,52 @@ func (c *collector) flush(ctx context.Context, agg *aggregate) (bool, error) {
 	if err := upsertDevice(ctx, c.db, agg.SensorMAC, agg.Label, agg.Location, agg.IngestSource, agg.SensorTypeCode, agg.SensorCategory); err != nil {
 		return false, err
 	}
-	_, err := c.db.Exec(ctx, `
+	reading := bleReading{
+		TS:                  agg.Window,
+		SensorMAC:           agg.SensorMAC,
+		TemperatureC:        nullableMedianFloat(agg.TemperatureC),
+		HumidityPercent:     nullableMedianFloat(agg.HumidityPercent),
+		BatteryPercent:      nullableMedianFloat(agg.BatteryPercent),
+		RSSI:                nullableMedianFloat(agg.RSSI),
+		PressureHPa:         nullableMedianFloat(agg.PressureHPa),
+		CO2PPM:              nullableMedianFloat(agg.CO2PPM),
+		Lux:                 nullableMedianFloat(agg.Lux),
+		ETVOC:               nullableMedianFloat(agg.ETVOC),
+		SoilMoisturePercent: nullableMedianFloat(agg.SoilMoisturePercent),
+		ConductivityUSCM:    nullableMedianFloat(agg.ConductivityUSCM),
+	}
+	if _, err := upsertSensorMinuteReading(ctx, c.db, reading); err != nil {
+		return false, fmt.Errorf("insert %s %s: %w", agg.SensorMAC, agg.Window.Format(time.RFC3339), err)
+	}
+	log.Printf("flushed Cisco Sensor Connect sensor=%s minute=%s", agg.SensorMAC, agg.Window.Format(time.RFC3339))
+	return true, nil
+}
+
+func backfillSensorMinuteReadings(ctx context.Context, db sensorMinuteExecer, readings []bleReading) (int, error) {
+	var inserted int
+	for _, reading := range readings {
+		ok, err := upsertSensorMinuteReading(ctx, db, reading)
+		if err != nil {
+			return inserted, err
+		}
+		if ok {
+			inserted++
+		}
+	}
+	return inserted, nil
+}
+
+func upsertSensorMinuteReading(ctx context.Context, db sensorMinuteExecer, reading bleReading) (bool, error) {
+	if db == nil || reading.empty() {
+		return false, nil
+	}
+	if strings.TrimSpace(reading.SensorMAC) == "" {
+		return false, errors.New("sensor MAC is required")
+	}
+	if reading.TS.IsZero() {
+		return false, errors.New("sensor timestamp is required")
+	}
+	_, err := db.Exec(ctx, `
 		INSERT INTO sensor_minute (
 			ts, mac, temperature_c, humidity_percent, battery_percent,
 			rssi_dbm, pressure_hpa, co2_ppm, lux, etvoc,
@@ -1518,22 +1874,21 @@ func (c *collector) flush(ctx context.Context, agg *aggregate) (bool, error) {
 			soil_moisture_percent = COALESCE(EXCLUDED.soil_moisture_percent, sensor_minute.soil_moisture_percent),
 			conductivity_us_cm = COALESCE(EXCLUDED.conductivity_us_cm, sensor_minute.conductivity_us_cm),
 			inserted_at = now()
-	`, agg.Window, agg.SensorMAC,
-		nullablePtr(nullableMedianFloat(agg.TemperatureC)),
-		nullablePtr(nullableMedianFloat(agg.HumidityPercent)),
-		nullablePtr(nullableMedianFloat(agg.BatteryPercent)),
-		nullablePtr(nullableMedianFloat(agg.RSSI)),
-		nullablePtr(nullableMedianFloat(agg.PressureHPa)),
-		nullablePtr(nullableMedianFloat(agg.CO2PPM)),
-		nullablePtr(nullableMedianFloat(agg.Lux)),
-		nullablePtr(nullableMedianFloat(agg.ETVOC)),
-		nullablePtr(nullableMedianFloat(agg.SoilMoisturePercent)),
-		nullablePtr(nullableMedianFloat(agg.ConductivityUSCM)),
+	`, reading.TS.Truncate(time.Minute), reading.SensorMAC,
+		nullablePtr(reading.TemperatureC),
+		nullablePtr(reading.HumidityPercent),
+		nullablePtr(reading.BatteryPercent),
+		nullablePtr(reading.RSSI),
+		nullablePtr(reading.PressureHPa),
+		nullablePtr(reading.CO2PPM),
+		nullablePtr(reading.Lux),
+		nullablePtr(reading.ETVOC),
+		nullablePtr(reading.SoilMoisturePercent),
+		nullablePtr(reading.ConductivityUSCM),
 	)
 	if err != nil {
-		return false, fmt.Errorf("insert %s %s: %w", agg.SensorMAC, agg.Window.Format(time.RFC3339), err)
+		return false, fmt.Errorf("upsert sensor_minute %s %s: %w", reading.SensorMAC, reading.TS.Format(time.RFC3339), err)
 	}
-	log.Printf("flushed Cisco Sensor Connect sensor=%s minute=%s", agg.SensorMAC, agg.Window.Format(time.RFC3339))
 	return true, nil
 }
 

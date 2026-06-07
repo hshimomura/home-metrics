@@ -32,7 +32,9 @@
         "characteristic_id": "00001a02-0000-1000-8000-00805f9b34fb",
         "poll_interval": "24h",
         "jitter": "30m",
-        "advertisement_max_age": "10m"
+        "advertisement_max_age": "10m",
+        "history_backfill": false,
+        "max_history_entries": 24
       }
     }
   ]

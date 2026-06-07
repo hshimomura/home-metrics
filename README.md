@@ -171,9 +171,11 @@ writes fail, pending aggregate windows are retained and summarized in logs at
 Xiaomi Flower Care / MiFlora plant support also uses advertisement telemetry
 for temperature, illuminance, soil moisture, and conductivity. Flower Care
 battery and firmware are exposed through connected GATT reads, so the collector
-can optionally poll only the battery characteristic at a very low frequency.
-Configure this per device with `gatt_battery` in `sensors.json`; devices without
-that block remain advertisement-only.
+can optionally poll the battery characteristic at a very low frequency. The same
+low-frequency GATT poll can also backfill sparse hourly Flower Care history
+entries when `history_backfill` is explicitly enabled. Configure this per device
+with `gatt_battery` in `sensors.json`; devices without that block remain
+advertisement-only.
 
 Example Flower Care target:
 
@@ -191,7 +193,9 @@ Example Flower Care target:
     "characteristic_id": "00001a02-0000-1000-8000-00805f9b34fb",
     "poll_interval": "24h",
     "jitter": "30m",
-    "advertisement_max_age": "10m"
+    "advertisement_max_age": "10m",
+    "history_backfill": false,
+    "max_history_entries": 24
   }
 }
 ```
@@ -202,9 +206,14 @@ plant sensor is polled once every 24 hours plus or minus 30 minutes. Before
 connecting, the collector verifies that a recent advertisement was received; if
 the latest telemetry is older than `advertisement_max_age`, the GATT poll is
 skipped and retried later. Each successful poll connects through the control
-API, reads `1a02`, stores only `battery_percent`, and disconnects. Real-time
-GATT sensor reads and history reads are intentionally not part of the production
-collector.
+API, reads `1a02`, stores `battery_percent`, and disconnects. If
+`history_backfill` is true, the collector then reads Flower Care history service
+`1206` with one short GATT connection per entry, maps device-relative timestamps
+to wall-clock minutes, and upserts the sparse points into `sensor_minute` without
+overwriting existing non-null advertisement values. History backfill defaults to
+off and should stay conservative because connected GATT can pause advertisements
+while the session is open. GATT control sessions are serialized inside the
+collector so battery and history reads do not overlap.
 
 See
 [docs/xiaomi-flower-care-cisco-sensor-connect.md](docs/xiaomi-flower-care-cisco-sensor-connect.md)
