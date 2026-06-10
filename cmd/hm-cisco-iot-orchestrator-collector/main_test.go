@@ -168,6 +168,18 @@ func TestDecodeBLEPayloadExtractsXiaomiFlowerCareServiceData(t *testing.T) {
 			},
 		},
 		{
+			name:       "soil moisture with generic humidity-like bytes",
+			payloadHex: "020106030295fe131695fe71209800021201737e855c0d0810010b",
+			assertMetric: func(t *testing.T, got bleReading) {
+				if got.SoilMoisturePercent == nil || *got.SoilMoisturePercent != 11 {
+					t.Fatalf("soil moisture=%v, want 11", got.SoilMoisturePercent)
+				}
+				if got.HumidityPercent != nil {
+					t.Fatalf("humidity=%v, want nil", got.HumidityPercent)
+				}
+			},
+		},
+		{
 			name:       "conductivity",
 			payloadHex: "020106030295fe141695fe71209800987d73147e855c0d0910024100",
 			assertMetric: func(t *testing.T, got bleReading) {

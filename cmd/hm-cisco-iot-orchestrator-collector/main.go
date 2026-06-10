@@ -1511,6 +1511,9 @@ func decodeServiceData(payloadHex string) bleReading {
 	if err != nil {
 		return bleReading{}
 	}
+	if looksLikeXiaomiFE95(data) {
+		return sanitizeReading(decodeXiaomiFE95(data))
+	}
 	r := bleReading{}
 	if len(data) >= 6 && data[0] == 0xa1 && data[1] == 0x01 {
 		r.BatteryPercent = floatPtr(float64(data[2]))
@@ -1561,6 +1564,10 @@ func decodeServiceData(payloadHex string) bleReading {
 	}
 	r.merge(decodeXiaomiFE95(data))
 	return sanitizeReading(r)
+}
+
+func looksLikeXiaomiFE95(data []byte) bool {
+	return len(data) >= 15 && data[0] == 0x71 && data[1] == 0x20 && data[2] == 0x98 && data[3] == 0x00
 }
 
 func decodeFlowerCareRealtimeGATT(data []byte) (bleReading, error) {
