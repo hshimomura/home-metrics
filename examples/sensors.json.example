@@ -36,6 +36,26 @@
         "history_backfill": false,
         "max_history_entries": 24
       }
+    },
+    {
+      "mac": "aa:bb:cc:dd:ee:04",
+      "label": "Blueberry2",
+      "ingest_source": "cisco_sensor_connect",
+      "sensor_type_code": "xiaomi_flower_care",
+      "sensor_category": "plant",
+      "location": "Blueberry2",
+      "enabled": true,
+      "gatt_battery": {
+        "enabled": true,
+        "device_id": "00000000-0000-0000-0000-000000000001",
+        "service_id": "1204",
+        "characteristic_id": "00001a02-0000-1000-8000-00805f9b34fb",
+        "poll_interval": "24h",
+        "jitter": "30m",
+        "advertisement_max_age": "10m",
+        "history_backfill": false,
+        "max_history_entries": 24
+      }
     }
   ]
 }

@@ -566,6 +566,19 @@ The first configured Flower Care target is:
 }
 ```
 
+The current lab deployment has four Flower Care targets. `Blueberry2`,
+`Blueberry3`, and `Blueberry4` were identified with a pve2 BlueZ scan and then
+SCIM onboarded with `isRandom=false`. Their advertisement topic subscription
+uses `registerTopic` with `technology=ble`, `ble.type=advertisements`,
+`ble.serviceID=fe95`, and `ble.characteristicID=fe95`.
+
+| Label | MAC | SCIM device ID |
+| --- | --- | --- |
+| Blueberry1 | `5C:85:7E:14:73:7D` | `48c71db0-ce81-43c2-849f-5da7fef23ec4` |
+| Blueberry2 | `5C:85:7E:14:70:AC` | `4f9c3816-709e-446b-83ca-d600b05883a7` |
+| Blueberry3 | `5C:85:7E:14:70:9F` | `ba879169-a08b-46b8-ae3c-0212d3f9f101` |
+| Blueberry4 | `5C:85:7E:14:73:4A` | `fb404a13-a2c9-4ef9-8030-892fd8a37723` |
+
 ## Device Metadata
 
 The collector writes explicit device metadata:
