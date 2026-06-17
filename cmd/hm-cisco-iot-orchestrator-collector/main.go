@@ -157,6 +157,7 @@ type aggregate struct {
 
 type collector struct {
 	mu      sync.Mutex
+	dbMu    *sync.Mutex
 	db      *pgx.Conn
 	windows map[string]*aggregate
 	flushFn func(context.Context, *aggregate) (bool, error)
@@ -164,6 +165,7 @@ type collector struct {
 
 type statusReporter struct {
 	mu     sync.Mutex
+	dbMu   *sync.Mutex
 	db     *pgx.Conn
 	target collectorstatus.Target
 }
@@ -221,7 +223,9 @@ func main() {
 		}
 	}
 
+	dbMu := &sync.Mutex{}
 	reporter := &statusReporter{
+		dbMu: dbMu,
 		db: db,
 		target: collectorstatus.Target{
 			CollectorName: "hm-cisco-iot-orchestrator-collector",
@@ -229,7 +233,7 @@ func main() {
 			TargetKey:     cfg.MQTTAddr + "/" + cfg.Topic,
 		},
 	}
-	c := &collector{db: db, windows: map[string]*aggregate{}}
+	c := &collector{dbMu: dbMu, db: db, windows: map[string]*aggregate{}}
 
 	if cfg.RegisterDataApp {
 		if err := registerDataApp(ctx, cfg); err != nil {
@@ -487,7 +491,13 @@ func pollGATTBattery(ctx context.Context, cfg config, target targetDevice, c *co
 	if c == nil || c.db == nil {
 		return nil
 	}
+	if c.dbMu != nil {
+		c.dbMu.Lock()
+	}
 	lastTelemetry, err := latestTelemetryAt(ctx, c.db, target.MAC)
+	if c.dbMu != nil {
+		c.dbMu.Unlock()
+	}
 	if err != nil {
 		return err
 	}
@@ -514,13 +524,13 @@ func pollGATTBattery(ctx context.Context, cfg config, target targetDevice, c *co
 		return err
 	}
 	log.Printf("stored Cisco Sensor Connect GATT battery sensor=%s battery=%d firmware=%q", target.MAC, battery, firmware)
-	if err := pollGATTHistoryBackfill(ctx, cfg, target, c.db); err != nil {
+	if err := pollGATTHistoryBackfill(ctx, cfg, target, c.db, c.dbMu); err != nil {
 		return err
 	}
 	return nil
 }
 
-func pollGATTHistoryBackfill(ctx context.Context, cfg config, target targetDevice, db *pgx.Conn) error {
+func pollGATTHistoryBackfill(ctx context.Context, cfg config, target targetDevice, db *pgx.Conn, dbMu *sync.Mutex) error {
 	if !gattHistoryBackfillEnabled(target) || db == nil {
 		return nil
 	}
@@ -534,6 +544,10 @@ func pollGATTHistoryBackfill(ctx context.Context, cfg config, target targetDevic
 	if len(result.Readings) == 0 {
 		log.Printf("Flower Care GATT history empty sensor=%s count=%d", target.MAC, result.Count)
 		return nil
+	}
+	if dbMu != nil {
+		dbMu.Lock()
+		defer dbMu.Unlock()
 	}
 	if err := upsertDevice(ctx, db, target.MAC, target.Label, target.Location, target.IngestSource, target.SensorTypeCode, target.SensorCategory); err != nil {
 		return err
@@ -1814,6 +1828,10 @@ func (c *collector) flush(ctx context.Context, agg *aggregate) (bool, error) {
 	if c.db == nil || agg.empty() {
 		return false, nil
 	}
+	if c.dbMu != nil {
+		c.dbMu.Lock()
+		defer c.dbMu.Unlock()
+	}
 	if err := upsertDevice(ctx, c.db, agg.SensorMAC, agg.Label, agg.Location, agg.IngestSource, agg.SensorTypeCode, agg.SensorCategory); err != nil {
 		return false, err
 	}
@@ -1940,6 +1958,10 @@ func (r *statusReporter) MarkSuccess(ctx context.Context) {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.dbMu != nil {
+		r.dbMu.Lock()
+		defer r.dbMu.Unlock()
+	}
 	if err := collectorstatus.MarkSuccess(ctx, r.db, r.target); err != nil {
 		log.Printf("record collector success: %v", err)
 	}
@@ -1951,6 +1973,10 @@ func (r *statusReporter) MarkDataSuccess(ctx context.Context) {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.dbMu != nil {
+		r.dbMu.Lock()
+		defer r.dbMu.Unlock()
+	}
 	if err := collectorstatus.MarkDataSuccess(ctx, r.db, r.target); err != nil {
 		log.Printf("record collector data success: %v", err)
 	}
@@ -1962,6 +1988,10 @@ func (r *statusReporter) MarkFailure(ctx context.Context, failure error) {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.dbMu != nil {
+		r.dbMu.Lock()
+		defer r.dbMu.Unlock()
+	}
 	if err := collectorstatus.MarkFailure(ctx, r.db, r.target, failure); err != nil {
 		log.Printf("record collector failure: %v", err)
 	}
