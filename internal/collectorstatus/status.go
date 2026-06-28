@@ -4,7 +4,7 @@ import (
 	"context"
 	"strings"
 
-	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 const maxErrorLength = 2048
@@ -15,6 +15,10 @@ type Target struct {
 	TargetKey     string
 }
 
+type Execer interface {
+	Exec(context.Context, string, ...any) (pgconn.CommandTag, error)
+}
+
 func (t Target) normalized() Target {
 	if strings.TrimSpace(t.TargetKey) == "" {
 		t.TargetKey = "default"
@@ -22,15 +26,15 @@ func (t Target) normalized() Target {
 	return t
 }
 
-func MarkSuccess(ctx context.Context, db *pgx.Conn, target Target) error {
+func MarkSuccess(ctx context.Context, db Execer, target Target) error {
 	return markSuccess(ctx, db, target, false)
 }
 
-func MarkDataSuccess(ctx context.Context, db *pgx.Conn, target Target) error {
+func MarkDataSuccess(ctx context.Context, db Execer, target Target) error {
 	return markSuccess(ctx, db, target, true)
 }
 
-func markSuccess(ctx context.Context, db *pgx.Conn, target Target, dataWritten bool) error {
+func markSuccess(ctx context.Context, db Execer, target Target, dataWritten bool) error {
 	target = target.normalized()
 	_, err := db.Exec(ctx, `
 		INSERT INTO collector_status (
@@ -61,7 +65,7 @@ func markSuccess(ctx context.Context, db *pgx.Conn, target Target, dataWritten b
 	return err
 }
 
-func MarkFailure(ctx context.Context, db *pgx.Conn, target Target, failure error) error {
+func MarkFailure(ctx context.Context, db Execer, target Target, failure error) error {
 	target = target.normalized()
 	message := ""
 	if failure != nil {

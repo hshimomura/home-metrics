@@ -35,10 +35,17 @@ func (api *apiServer) handleHealthDetails(w http.ResponseWriter, r *http.Request
 			          AND target_type = 'cisco_spaces_firehose'
 			          AND target_key = 'default'
 			        ))
-			   AND (last_success_at IS NULL
-			        OR consecutive_failures > 0
-			        OR updated_at < now() - $1::interval))
-	`, intervalSeconds(envDuration("COLLECTOR_STATUS_STALE_AFTER", 5*time.Minute)), includeCiscoSpaces).Scan(&res.CollectorTargets, &res.StaleCollectors)
+				   AND (last_success_at IS NULL
+				        OR consecutive_failures > 0
+				        OR updated_at < now() - CASE
+				             WHEN target_type = 'gatt_control' THEN $3::interval
+				             ELSE $1::interval
+				           END))
+		`,
+		intervalSeconds(envDuration("COLLECTOR_STATUS_STALE_AFTER", 5*time.Minute)),
+		includeCiscoSpaces,
+		intervalSeconds(envDuration("GATT_CONTROL_STATUS_STALE_AFTER", 26*time.Hour)),
+	).Scan(&res.CollectorTargets, &res.StaleCollectors)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "query health details")
 		return

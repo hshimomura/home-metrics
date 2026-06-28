@@ -124,3 +124,23 @@ Device classification now uses explicit metadata fields:
 - `sensor_type_code`
 - `sensor_type`
 - `sensor_category`
+
+Sensor ingestion now enforces one-device/one-collector ownership through
+`devices.ingest_source`. A configured source can claim a previous `NULL` owner,
+but a different non-null owner is rejected. Disabled devices remain part of
+configuration reconciliation, allowing the same owner to disable and re-enable
+them. Cisco Spaces startup no longer prunes configured devices.
+
+Cisco Sensor Connect now uses a PostgreSQL connection pool and waits for GATT
+workers before final shutdown flush. MQTT reconnect backoff resets after a
+successful connection and subscription. GATT status is independent per device
+using `target_type=gatt_control` and the normalized MAC address. The API health
+summary gives these low-frequency targets a separate 26-hour stale window.
+
+Migration `0017_add_weighted_rollup_counts.sql` adds a sample count for every
+metric in each rollup table. `hm-db-maint` records an immutable
+`accuracy_cutoff`, rebuilds only complete retained buckets at or after it, and
+uses metric-specific counts for weighted 12-hour and daily averages. Older
+averages remain unchanged because their source counts are unavailable. The
+accuracy guarantee is the average of non-null `sensor_minute` values, not raw
+advertisement packets.

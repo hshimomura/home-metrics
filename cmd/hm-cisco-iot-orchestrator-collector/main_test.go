@@ -19,6 +19,52 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
+type recordingStatusMarker struct {
+	calls []string
+}
+
+func (r *recordingStatusMarker) MarkSuccess(context.Context) {
+	r.calls = append(r.calls, "success")
+}
+
+func (r *recordingStatusMarker) MarkDataSuccess(context.Context) {
+	r.calls = append(r.calls, "data")
+}
+
+func (r *recordingStatusMarker) MarkFailure(_ context.Context, _ error) {
+	r.calls = append(r.calls, "failure")
+}
+
+func TestReportGATTResultPreservesPartialDataAndFailure(t *testing.T) {
+	reporter := &recordingStatusMarker{}
+	reportGATTResult(context.Background(), reporter, true, errors.New("history failed"))
+	if got, want := strings.Join(reporter.calls, ","), "data,failure"; got != want {
+		t.Fatalf("calls = %q, want %q", got, want)
+	}
+}
+
+func TestReportGATTResultMarksNoDataSuccess(t *testing.T) {
+	reporter := &recordingStatusMarker{}
+	reportGATTResult(context.Background(), reporter, false, nil)
+	if got, want := strings.Join(reporter.calls, ","), "success"; got != want {
+		t.Fatalf("calls = %q, want %q", got, want)
+	}
+}
+
+func TestReconnectBackoffResetsWhenMQTTIsReady(t *testing.T) {
+	backoff := newReconnectBackoff(time.Second, time.Minute)
+	if got := backoff.Next(); got != time.Second {
+		t.Fatalf("first delay = %s", got)
+	}
+	if got := backoff.Next(); got != 2*time.Second {
+		t.Fatalf("second delay = %s", got)
+	}
+	backoff.Reset()
+	if got := backoff.Next(); got != time.Second {
+		t.Fatalf("delay after ready reset = %s", got)
+	}
+}
+
 func TestDecodeDataBatchWithServiceData(t *testing.T) {
 	ts := time.Date(2026, 6, 2, 12, 34, 0, 0, time.UTC)
 	payload := protoMessage(1, protoFields(
@@ -398,6 +444,7 @@ func TestLoadTargetsParsesFlowerCareHistoryBackfillConfig(t *testing.T) {
 			"label": "Blueberry1",
 			"ingest_source": "cisco_sensor_connect",
 			"sensor_type_code": "xiaomi_flower_care",
+			"sensor_category": "plant",
 			"gatt_battery": {
 				"enabled": true,
 				"device_id": "device-1",
@@ -428,6 +475,57 @@ func TestLoadTargetsParsesFlowerCareHistoryBackfillConfig(t *testing.T) {
 	}
 }
 
+func TestLoadTargetRegistryKeepsDisabledDevicesAndRejectsDuplicates(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "sensors.json")
+	data := `{"devices":[
+		{"mac":"5c:85:7e:14:73:7d","label":"one","ingest_source":"cisco_sensor_connect","enabled":false},
+		{"mac":"5c:85:7e:14:70:ac","label":"two","ingest_source":"cisco_sensor_connect","enabled":true}
+	]}`
+	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	registry, err := loadTargetRegistry(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(registry.All) != 2 || len(registry.Enabled) != 1 {
+		t.Fatalf("registry sizes all=%d enabled=%d", len(registry.All), len(registry.Enabled))
+	}
+
+	duplicate := `{"devices":[
+		{"mac":"5c:85:7e:14:73:7d","ingest_source":"cisco_sensor_connect"},
+		{"mac":"5C-85-7E-14-73-7D","ingest_source":"cisco_sensor_connect"}
+	]}`
+	if err := os.WriteFile(path, []byte(duplicate), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loadTargetRegistry(path); err == nil || !strings.Contains(err.Error(), "duplicate sensor mac") {
+		t.Fatalf("duplicate error = %v", err)
+	}
+}
+
+func TestLoadTargetRegistrySelectsOnlySensorConnectOwnedDevices(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "sensors.json")
+	data := `{"devices":[
+		{"mac":"aa:bb:cc:dd:ee:01","label":"local","ingest_source":"ble","enabled":true},
+		{"mac":"aa:bb:cc:dd:ee:02","label":"remote","ingest_source":"cisco_iot_orchestrator","enabled":true}
+	]}`
+	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	registry, err := loadTargetRegistry(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(registry.All) != 1 || len(registry.Enabled) != 1 {
+		t.Fatalf("registry sizes all=%d enabled=%d", len(registry.All), len(registry.Enabled))
+	}
+	if target, ok := registry.All["aa:bb:cc:dd:ee:02"]; !ok || target.IngestSource != sensorConnectIngestSource {
+		t.Fatalf("Sensor Connect target = %#v, present=%t", target, ok)
+	}
+}
+
 func TestGATTHistoryBackfillDefaultsDisabledAndConservativeLimit(t *testing.T) {
 	target := targetDevice{
 		GATTBattery: &gattBatteryConfig{DeviceID: "device-1"},
@@ -440,15 +538,11 @@ func TestGATTHistoryBackfillDefaultsDisabledAndConservativeLimit(t *testing.T) {
 	}
 }
 
-func TestNormalizeSensorMetadataDefaultsFlowerCareCategory(t *testing.T) {
-	if got := normalizeIngestSource(""); got != sensorConnectIngestSource {
-		t.Fatalf("ingest source=%q, want %q", got, sensorConnectIngestSource)
-	}
-	if got := normalizeSensorCategory("", "xiaomi_flower_care"); got != "plant" {
-		t.Fatalf("sensor category=%q, want plant", got)
-	}
-	if got := normalizeSensorCategory("custom", "xiaomi_flower_care"); got != "custom" {
-		t.Fatalf("explicit sensor category=%q, want custom", got)
+func TestNormalizeIngestSourceDefaultsToSensorConnect(t *testing.T) {
+	for _, source := range []string{"", "cisco_iot_orchestrator", "cisco-iot", "cisco_sensor_connect"} {
+		if got := normalizeIngestSource(source); got != sensorConnectIngestSource {
+			t.Fatalf("ingest source %q normalized to %q, want %q", source, got, sensorConnectIngestSource)
+		}
 	}
 }
 

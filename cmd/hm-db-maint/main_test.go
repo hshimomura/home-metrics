@@ -36,3 +36,31 @@ func TestRetainSensorMinuteDeletesOldRows(t *testing.T) {
 		t.Fatalf("args = %#v, want retain interval", db.args)
 	}
 }
+
+func TestBuildMinuteRollupSQLIncludesMetricCountsAndCutoff(t *testing.T) {
+	sql := buildRollupSQL("sensor_1hour", "sensor_minute", false)
+	for _, fragment := range []string{
+		"avg(temperature_c)",
+		"count(temperature_c)",
+		"temperature_c_count = EXCLUDED.temperature_c_count",
+		"GREATEST(now() - $2::interval, $3::timestamptz)",
+	} {
+		if !strings.Contains(sql, fragment) {
+			t.Fatalf("minute rollup SQL missing %q: %s", fragment, sql)
+		}
+	}
+}
+
+func TestBuildWeightedRollupSQLUsesMetricSpecificCount(t *testing.T) {
+	sql := buildRollupSQL("sensor_1day", "sensor_1hour", true)
+	for _, fragment := range []string{
+		"sum(temperature_c * temperature_c_count)",
+		"sum(temperature_c_count)",
+		"sum(battery_percent * battery_percent_count)",
+		"sum(battery_percent_count)",
+	} {
+		if !strings.Contains(sql, fragment) {
+			t.Fatalf("weighted rollup SQL missing %q: %s", fragment, sql)
+		}
+	}
+}

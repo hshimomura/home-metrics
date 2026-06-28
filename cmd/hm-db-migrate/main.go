@@ -194,6 +194,9 @@ func latestSchemaSnapshotPresent(ctx context.Context, db *pgx.Conn) (bool, error
 		{"sensor_1hour", "soil_moisture_percent", true},
 		{"sensor_12hour", "soil_moisture_percent", true},
 		{"sensor_1day", "soil_moisture_percent", true},
+		{"sensor_1hour", "temperature_c_count", true},
+		{"sensor_12hour", "temperature_c_count", true},
+		{"sensor_1day", "temperature_c_count", true},
 		{"collector_status", "first_failure_at", true},
 	}
 	for _, check := range checks {
@@ -205,7 +208,7 @@ func latestSchemaSnapshotPresent(ctx context.Context, db *pgx.Conn) (bool, error
 			return false, nil
 		}
 	}
-	for _, table := range []string{"sensor_types", "energy_metric_definitions"} {
+	for _, table := range []string{"sensor_types", "energy_metric_definitions", "rollup_accuracy_state"} {
 		hasTable, err := tableExists(ctx, db, table)
 		if err != nil {
 			return false, err

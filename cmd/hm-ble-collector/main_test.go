@@ -1,9 +1,47 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
+
+	"home-metrics/internal/sensorstore"
 )
+
+func TestLoadTargetRegistrySelectsOnlyBLEOwnedDevices(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "sensors.json")
+	data := `{"devices":[
+		{"mac":"aa:bb:cc:dd:ee:01","label":"local","ingest_source":"ble","enabled":true},
+		{"mac":"aa:bb:cc:dd:ee:02","label":"remote","ingest_source":"cisco_sensor_connect","enabled":true}
+	]}`
+	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	registry, err := loadTargetRegistry(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(registry.All) != 1 || len(registry.Enabled) != 1 {
+		t.Fatalf("registry sizes all=%d enabled=%d", len(registry.All), len(registry.Enabled))
+	}
+	if _, ok := registry.All["aa:bb:cc:dd:ee:01"]; !ok {
+		t.Fatal("BLE-owned device missing")
+	}
+}
+
+func TestSensorMinuteUpsertUsesSparseMerge(t *testing.T) {
+	for _, column := range []string{
+		"temperature_c", "humidity_percent", "battery_percent", "rssi_dbm",
+		"pressure_hpa", "co2_ppm", "lux", "etvoc",
+	} {
+		want := column + " = COALESCE(EXCLUDED." + column + ", sensor_minute." + column + ")"
+		if !strings.Contains(sensorstore.UpsertMinuteSQL, want) {
+			t.Fatalf("upsert SQL does not preserve sparse %s", column)
+		}
+	}
+}
 
 func TestBLEOutlierFilterSkipsSingleSpike(t *testing.T) {
 	c := testCollector()

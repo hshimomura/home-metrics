@@ -34,7 +34,9 @@ Returns `{"status":"ok"}` when the database is reachable.
 Returns database status and collector status summary. `stale_collectors` is
 counted from `collector_status` when a row has no successful run, has
 consecutive failures, or has not updated within `COLLECTOR_STATUS_STALE_AFTER`
-(default `5m`). The optional `hm-cisco-spaces-collector` row is excluded unless
+(default `5m`). GATT control targets use `GATT_CONTROL_STATUS_STALE_AFTER`
+(default `26h`) because they normally run once per day. The optional
+`hm-cisco-spaces-collector` row is excluded unless
 `CISCO_SPACES_COLLECTOR_ENABLED=true`.
 
 ```json
@@ -119,6 +121,9 @@ Returns expected rows from `collector_status`. Optional collectors that are
 intentionally disabled, such as `hm-cisco-spaces-collector` when
 `CISCO_SPACES_COLLECTOR_ENABLED=false`, are omitted from this response in the
 same way disabled collector profiles do not appear in the admin collector list.
+Cisco Sensor Connect GATT rows use `target_type=gatt_control` and one normalized
+MAC address per `target_key`, so one device cannot clear another device's
+failure. MQTT and GATT statuses are independent.
 
 ### GET /api/admin/cisco-spaces-firehose
 

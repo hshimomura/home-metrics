@@ -2,8 +2,6 @@ package main
 
 import (
 	"encoding/json"
-	"os"
-	"path/filepath"
 	"testing"
 	"time"
 )
@@ -236,33 +234,6 @@ func TestBatteryAllowlist(t *testing.T) {
 		t.Fatal("expected allowlisted battery reading")
 	}
 	assertPtr(t, "battery", got.BatteryPercent, 91)
-}
-
-func TestLoadConfiguredSensorMACs(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "sensors.json")
-	if err := os.WriteFile(path, []byte(`{
-		"devices": [
-			{"mac": "AA-BB-CC-DD-EE-01"},
-			{"mac": "aa:bb:cc:dd:ee:01"},
-			{"mac": "AA:BB:CC:DD:EE:02"},
-			{"mac": "not-a-mac"}
-		]
-	}`), 0o600); err != nil {
-		t.Fatalf("write sensors: %v", err)
-	}
-	got, err := loadConfiguredSensorMACs(path)
-	if err != nil {
-		t.Fatalf("load configured sensors: %v", err)
-	}
-	want := []string{"aa:bb:cc:dd:ee:01", "aa:bb:cc:dd:ee:02"}
-	if len(got) != len(want) {
-		t.Fatalf("macs = %v, want %v", got, want)
-	}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Fatalf("macs = %v, want %v", got, want)
-		}
-	}
 }
 
 func TestValidDeviceLabelRejectsBlankAndMACLabels(t *testing.T) {

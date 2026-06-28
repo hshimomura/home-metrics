@@ -25,6 +25,7 @@ db/schema.sql                          fresh DB schema
 db/migrations/                         incremental migrations
 docs/api.md                            REST API reference
 docs/openapi.yaml                      OpenAPI summary
+docs/refactoring-plan.md               reviewed staged refactoring plan
 docs/xiaomi-flower-care-cisco-sensor-connect.md
                                        Xiaomi Flower Care preparation notes
 web/                                   metrics and admin pages
@@ -49,8 +50,10 @@ Main tables:
   categorization.
 - `sensor_minute`: one row per device/minute. Collectors store minute-level
   median samples for environmental values.
-- `sensor_1hour`, `sensor_12hour`, `sensor_1day`: rollup tables refreshed by
-  `hm-db-maint`.
+- `sensor_1hour`, `sensor_12hour`, `sensor_1day`: metric averages and
+  metric-specific sample counts refreshed by `hm-db-maint`.
+- `rollup_accuracy_state`: immutable cutoff after which weighted rollups are
+  guaranteed to be based on complete retained minute buckets.
 - `energy_devices`, `energy_readings`, `energy_metric_definitions`: power and
   energy readings.
 - `collector_status`: one row per collector target, updated by collectors.
@@ -65,6 +68,12 @@ now decoded directly into `sensor_minute`; the collector keeps runtime state in
 Migration `0012_add_plant_sensor_metrics.sql` adds plant sensor columns
 (`soil_moisture_percent` and `conductivity_us_cm`) to `sensor_minute` and all
 rollup tables.
+Migration `0017_add_weighted_rollup_counts.sql` adds metric-specific sample
+counts and `rollup_accuracy_state`. On first maintenance after migration, the
+service records the first complete one-day bucket after the oldest retained
+minute as `accuracy_cutoff`. Buckets at or after that cutoff are rebuilt from
+`sensor_minute` and higher rollups use weighted averages. Older averages are
+kept because their original sample counts cannot be reconstructed.
 `db/schema.sql` is a latest-state fresh DB snapshot. On a fresh database,
 `hm-db-migrate` detects that snapshot and records the existing migrations as the
 baseline before applying future migrations.
@@ -86,12 +95,15 @@ API_TOKEN=change-me
 API_REQUIRE_TOKEN=false
 API_ALLOWED_ORIGINS=http://localhost:8080
 COLLECTOR_STATUS_STALE_AFTER=5m
+GATT_CONTROL_STATUS_STALE_AFTER=26h
 CISCO_SPACES_COLLECTOR_ENABLED=false
 ```
 
 `COLLECTOR_STATUS_STALE_AFTER` controls `/api/health/details` and the admin UI
 summary. A collector is stale when it has never succeeded, has consecutive
 failures, or has not updated within this duration.
+Low-frequency GATT status uses `GATT_CONTROL_STATUS_STALE_AFTER` instead. Its
+26-hour default covers the 24-hour poll interval plus configured jitter.
 
 `hm-cisco-spaces-collector` is an optional profile. Keep
 `CISCO_SPACES_COLLECTOR_ENABLED=false` when it is intentionally stopped; the
@@ -102,6 +114,9 @@ firehose collector is expected to be running.
 The Cisco Spaces firehose collector does not keep a raw event database. It
 decodes incoming events and stores only the normalized minute-level sensor data
 plus collector status.
+Starting the Cisco Spaces collector does not prune or disable devices. Device
+ownership and enablement are changed only by the collector that owns the
+matching `devices.ingest_source`.
 
 ## Docker Compose
 
@@ -168,6 +183,15 @@ so the last minute is written even if no later MQTT message arrives. If database
 writes fail, pending aggregate windows are retained and summarized in logs at
 `CISCO_IOT_ORCH_PENDING_LOG_INTERVAL`.
 
+Sensor ownership is one device to one collector. The database ownership value
+for this collector is `cisco_sensor_connect`; command/profile aliases such as
+`cisco_iot_orchestrator` are not stored as ownership. A configured source may
+claim a device whose existing `ingest_source` is `NULL`, but a different
+non-null owner is rejected. Disabled configured devices are synchronized to the
+database and can be re-enabled by the same owner. Source migration must stop the
+old collector, conditionally update the expected old source, update the sensor
+configuration, and then start the new collector.
+
 Xiaomi Flower Care / MiFlora plant support also uses advertisement telemetry
 for temperature, illuminance, soil moisture, and conductivity. Flower Care
 battery and firmware are exposed through connected GATT reads, so the collector
@@ -216,6 +240,12 @@ while the session is open. GATT control sessions are serialized inside the
 collector so battery and history reads do not overlap. The collector does not
 clear on-device Flower Care history; sensor-side history cleanup is left to the
 official smartphone app sync path.
+
+MQTT and GATT health are independent. MQTT uses its broker/topic target. Each
+GATT device uses `target_type=gatt_control` and its normalized MAC address as
+`target_key`. If battery storage succeeds but a following history read fails,
+`last_data_at` is updated and the final GATT health remains failed until a later
+successful retry.
 
 See
 [docs/xiaomi-flower-care-cisco-sensor-connect.md](docs/xiaomi-flower-care-cisco-sensor-connect.md)

@@ -9,6 +9,8 @@ import (
 	"strings"
 	"time"
 
+	"home-metrics/internal/sensor"
+
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 )
@@ -44,23 +46,7 @@ type seriesPoint struct {
 	Value float64   `json:"value"`
 }
 
-type sensorMetric struct {
-	Key    string
-	Column string
-}
-
-var sensorMetrics = []sensorMetric{
-	{Key: "temperature_c", Column: "temperature_c"},
-	{Key: "humidity_percent", Column: "humidity_percent"},
-	{Key: "battery_percent", Column: "battery_percent"},
-	{Key: "rssi_dbm", Column: "rssi_dbm"},
-	{Key: "pressure_hpa", Column: "pressure_hpa"},
-	{Key: "co2_ppm", Column: "co2_ppm"},
-	{Key: "lux", Column: "lux"},
-	{Key: "etvoc", Column: "etvoc"},
-	{Key: "soil_moisture_percent", Column: "soil_moisture_percent"},
-	{Key: "conductivity_us_cm", Column: "conductivity_us_cm"},
-}
+var sensorMetrics = sensor.Metrics
 
 var metricColumns = buildMetricColumns(sensorMetrics)
 
@@ -172,7 +158,7 @@ func (api *apiServer) loadLatestSnapshot(ctx context.Context, mac string) (lates
 	return assembleLatestSnapshot(sensorMetrics, timestamps, readings)
 }
 
-func assembleLatestSnapshot(metrics []sensorMetric, timestamps []pgtype.Timestamptz, readings []pgtype.Float8) (latestSnapshot, error) {
+func assembleLatestSnapshot(metrics []sensor.Metric, timestamps []pgtype.Timestamptz, readings []pgtype.Float8) (latestSnapshot, error) {
 	snapshot := latestSnapshot{
 		Values:          make(map[string]*float64, len(metrics)),
 		ValueTimestamps: map[string]time.Time{},
@@ -193,7 +179,7 @@ func assembleLatestSnapshot(metrics []sensorMetric, timestamps []pgtype.Timestam
 	return snapshot, nil
 }
 
-func buildMetricColumns(metrics []sensorMetric) map[string]string {
+func buildMetricColumns(metrics []sensor.Metric) map[string]string {
 	columns := make(map[string]string, len(metrics))
 	for _, metric := range metrics {
 		columns[metric.Key] = metric.Column
@@ -201,7 +187,7 @@ func buildMetricColumns(metrics []sensorMetric) map[string]string {
 	return columns
 }
 
-func buildLatestSnapshotQuery(metrics []sensorMetric) string {
+func buildLatestSnapshotQuery(metrics []sensor.Metric) string {
 	var b strings.Builder
 	b.WriteString("SELECT\n")
 	for i := range metrics {

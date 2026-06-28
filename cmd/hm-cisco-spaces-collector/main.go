@@ -46,8 +46,6 @@ type config struct {
 	DryRun            bool
 	AllowSecondary    bool
 	Debug             bool
-	PruneBLESensors   bool
-	SensorsFile       string
 }
 
 type firehoseEvent struct {
@@ -243,14 +241,6 @@ func main() {
 		}
 		defer release()
 	}
-	if !cfg.DryRun {
-		if cfg.PruneBLESensors {
-			if err := pruneConfiguredBLESensors(ctx, db, cfg.SensorsFile); err != nil {
-				log.Printf("prune configured BLE sensors: %v", err)
-			}
-		}
-	}
-
 	p := newProcessor(cfg)
 	client := &http.Client{}
 	statusTarget := collectorstatus.Target{
@@ -307,8 +297,6 @@ func loadConfig() config {
 		DryRun:            envBool("CISCO_SPACES_DRY_RUN", false),
 		AllowSecondary:    envBool("CISCO_SPACES_ALLOW_SECONDARY", false),
 		Debug:             envBool("CISCO_SPACES_DEBUG", false),
-		PruneBLESensors:   envBool("CISCO_SPACES_PRUNE_CONFIGURED_BLE_SENSORS", true),
-		SensorsFile:       envString("BLE_SENSORS_FILE", defaultSensorsFile),
 	}
 	if cfg.SampleWindow < 1 {
 		cfg.SampleWindow = defaultSampleWindow
@@ -380,13 +368,6 @@ func parseMACSet(raw string) map[string]bool {
 		}
 	}
 	return result
-}
-
-func nullableString(value string, valid bool) any {
-	if !valid {
-		return nil
-	}
-	return value
 }
 
 func envString(name string, fallback string) string {

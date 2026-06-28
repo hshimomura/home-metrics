@@ -17,6 +17,8 @@ import (
 	"time"
 
 	"home-metrics/internal/collectorstatus"
+	"home-metrics/internal/sensor"
+	"home-metrics/internal/sensorstore"
 
 	"github.com/godbus/dbus/v5"
 	"github.com/jackc/pgx/v5"
@@ -61,6 +63,11 @@ type targetDevice struct {
 
 type targetConfig struct {
 	Devices []targetDevice `json:"devices"`
+}
+
+type targetRegistry struct {
+	All     map[string]targetDevice
+	Enabled map[string]targetDevice
 }
 
 type reading struct {
@@ -113,10 +120,11 @@ func main() {
 	if value := os.Getenv("BLE_ADAPTER"); value != "" {
 		adapterPath = dbus.ObjectPath(value)
 	}
-	targets, err := loadTargets(envString("BLE_SENSORS_FILE", defaultSensorsFile))
+	registry, err := loadTargetRegistry(envString("BLE_SENSORS_FILE", defaultSensorsFile))
 	if err != nil {
 		log.Fatalf("load BLE sensors: %v", err)
 	}
+	targets := registry.Enabled
 	if len(targets) == 0 {
 		log.Fatal("no enabled BLE sensors configured")
 	}
@@ -127,7 +135,7 @@ func main() {
 	}
 	defer db.Close(context.Background())
 
-	if err := ensureDevices(ctx, db, targets); err != nil {
+	if err := ensureDevices(ctx, db, registry.All); err != nil {
 		log.Fatalf("ensure devices: %v", err)
 	}
 
@@ -292,37 +300,60 @@ func loadOutlierConfig() outlierConfig {
 }
 
 func loadTargets(path string) (map[string]targetDevice, error) {
+	registry, err := loadTargetRegistry(path)
+	if err != nil {
+		return nil, err
+	}
+	return registry.Enabled, nil
+}
+
+func loadTargetRegistry(path string) (targetRegistry, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("read %s: %w", path, err)
+		return targetRegistry{}, fmt.Errorf("read %s: %w", path, err)
 	}
 	var config targetConfig
 	if err := json.Unmarshal(data, &config); err != nil {
-		return nil, fmt.Errorf("parse %s: %w", path, err)
+		return targetRegistry{}, fmt.Errorf("parse %s: %w", path, err)
 	}
-	targets := make(map[string]targetDevice)
+	registry := targetRegistry{All: make(map[string]targetDevice), Enabled: make(map[string]targetDevice)}
 	for _, device := range config.Devices {
-		device.MAC = strings.ToLower(strings.TrimSpace(device.MAC))
+		device.MAC = sensor.NormalizeMAC(device.MAC)
 		device.Label = strings.TrimSpace(device.Label)
 		device.Location = strings.TrimSpace(device.Location)
 		device.IngestSource = strings.TrimSpace(device.IngestSource)
 		device.SensorTypeCode = strings.TrimSpace(device.SensorTypeCode)
 		device.SensorCategory = strings.TrimSpace(device.SensorCategory)
 		if device.MAC == "" {
-			return nil, errors.New("sensor mac is required")
+			return targetRegistry{}, errors.New("sensor mac is required")
+		}
+		if _, duplicate := registry.All[device.MAC]; duplicate {
+			return targetRegistry{}, fmt.Errorf("duplicate sensor mac %s", device.MAC)
 		}
 		if device.Label == "" {
-			return nil, fmt.Errorf("sensor %s label is required", device.MAC)
+			return targetRegistry{}, fmt.Errorf("sensor %s label is required", device.MAC)
 		}
-		if device.Enabled != nil && !*device.Enabled {
+		if device.IngestSource == "" {
+			return targetRegistry{}, fmt.Errorf("sensor %s ingest_source is required", device.MAC)
+		}
+		if device.IngestSource == "cisco_sensor_connect" || device.IngestSource == "cisco_spaces" {
 			continue
+		}
+		if device.IngestSource != "ble" {
+			return targetRegistry{}, fmt.Errorf(
+				"sensor %s ingest_source %q is not owned by this collector",
+				device.MAC, device.IngestSource,
+			)
 		}
 		if device.Location == "" {
 			device.Location = device.Label
 		}
-		targets[device.MAC] = device
+		registry.All[device.MAC] = device
+		if device.Enabled == nil || *device.Enabled {
+			registry.Enabled[device.MAC] = device
+		}
 	}
-	return targets, nil
+	return registry, nil
 }
 
 func startDiscovery(conn *dbus.Conn, adapterPath dbus.ObjectPath) error {
@@ -651,32 +682,12 @@ func (c *collector) flush(ctx context.Context, agg *aggregate) (bool, error) {
 		pressure == nil && co2 == nil && lux == nil && etvoc == nil {
 		return false, nil
 	}
-	_, err := c.db.Exec(ctx, `
-		INSERT INTO sensor_minute (
-			ts, mac, temperature_c, humidity_percent, battery_percent,
-			rssi_dbm, pressure_hpa, co2_ppm, lux, etvoc
-		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-		ON CONFLICT (ts, mac) DO UPDATE SET
-			temperature_c = EXCLUDED.temperature_c,
-			humidity_percent = EXCLUDED.humidity_percent,
-			battery_percent = EXCLUDED.battery_percent,
-			rssi_dbm = EXCLUDED.rssi_dbm,
-			pressure_hpa = EXCLUDED.pressure_hpa,
-			co2_ppm = EXCLUDED.co2_ppm,
-			lux = EXCLUDED.lux,
-			etvoc = EXCLUDED.etvoc,
-			inserted_at = now()
-	`, agg.Window, agg.SensorMAC,
-		nullablePtr(temperature),
-		nullablePtr(humidity),
-		nullablePtr(battery),
-		nullablePtr(rssi),
-		nullablePtr(pressure),
-		nullablePtr(co2),
-		nullablePtr(lux),
-		nullablePtr(etvoc),
-	)
+	_, err := sensorstore.UpsertMinute(ctx, c.db, sensor.Reading{
+		TS: agg.Window, MAC: agg.SensorMAC,
+		TemperatureC: temperature, HumidityPercent: humidity,
+		BatteryPercent: battery, RSSI: rssi, PressureHPa: pressure,
+		CO2PPM: co2, Lux: lux, ETVOC: etvoc,
+	})
 	if err != nil {
 		return false, fmt.Errorf("insert %s %s: %w", agg.SensorMAC, agg.Window.Format(time.RFC3339), err)
 	}
@@ -742,25 +753,16 @@ func (agg *aggregate) empty() bool {
 
 func ensureDevices(ctx context.Context, db *pgx.Conn, targets map[string]targetDevice) error {
 	for _, target := range targets {
-		ingestSource := strings.TrimSpace(target.IngestSource)
-		if ingestSource == "" {
-			ingestSource = "ble"
-		}
 		sensorCategory := strings.TrimSpace(target.SensorCategory)
 		if sensorCategory == "" {
 			sensorCategory = "environment"
 		}
-		_, err := db.Exec(ctx, `
-			INSERT INTO devices (mac, label, location, ingest_source, sensor_type_code, sensor_category)
-			VALUES ($1, $2, $3, NULLIF($4, ''), NULLIF($5, ''), NULLIF($6, ''))
-			ON CONFLICT (mac) DO UPDATE SET
-				label = EXCLUDED.label,
-				location = EXCLUDED.location,
-				ingest_source = COALESCE(EXCLUDED.ingest_source, devices.ingest_source),
-				sensor_type_code = COALESCE(EXCLUDED.sensor_type_code, devices.sensor_type_code),
-				sensor_category = COALESCE(EXCLUDED.sensor_category, devices.sensor_category),
-				updated_at = now()
-		`, target.MAC, target.Label, target.Location, ingestSource, strings.TrimSpace(target.SensorTypeCode), sensorCategory)
+		err := sensorstore.SyncDevice(ctx, db, sensor.Device{
+			MAC: target.MAC, Label: target.Label, Location: target.Location,
+			IngestSource: strings.TrimSpace(target.IngestSource), IngestSourceExplicit: true,
+			SensorTypeCode: strings.TrimSpace(target.SensorTypeCode), SensorCategory: sensorCategory,
+			Enabled: target.Enabled == nil || *target.Enabled,
+		})
 		if err != nil {
 			return err
 		}
@@ -773,13 +775,6 @@ func nullableMedianFloat(values []float64) *float64 {
 		return nil
 	}
 	return floatPtr(median(values))
-}
-
-func nullablePtr(value *float64) any {
-	if value == nil {
-		return nil
-	}
-	return *value
 }
 
 func median(values []float64) float64 {

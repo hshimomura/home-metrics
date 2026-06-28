@@ -6,8 +6,11 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
+
+	"home-metrics/internal/sensor"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -58,71 +61,85 @@ type execer interface {
 }
 
 func refreshRollups(ctx context.Context, db *pgx.Conn, lookback time.Duration) error {
-	if err := refreshRollup(ctx, db, "sensor_1hour", "1 hour", "sensor_minute", lookback); err != nil {
+	cutoff, err := ensureAccuracyCutoff(ctx, db)
+	if err != nil {
 		return err
 	}
-	if err := refreshRollup(ctx, db, "sensor_12hour", "12 hours", "sensor_1hour", lookback); err != nil {
+	if err := refreshRollup(ctx, db, "sensor_1hour", "1 hour", "sensor_minute", lookback, cutoff, false); err != nil {
 		return err
 	}
-	if err := refreshRollup(ctx, db, "sensor_1day", "1 day", "sensor_1hour", lookback); err != nil {
+	if err := refreshRollup(ctx, db, "sensor_12hour", "12 hours", "sensor_1hour", lookback, cutoff, true); err != nil {
+		return err
+	}
+	if err := refreshRollup(ctx, db, "sensor_1day", "1 day", "sensor_1hour", lookback, cutoff, true); err != nil {
 		return err
 	}
 	return nil
 }
 
-func refreshRollup(ctx context.Context, db *pgx.Conn, target string, bucket string, source string, lookback time.Duration) error {
-	command := `
-		INSERT INTO ` + target + ` (
-			ts,
-			mac,
-			temperature_c,
-			humidity_percent,
-			battery_percent,
-			rssi_dbm,
-			pressure_hpa,
-			co2_ppm,
-			lux,
-			etvoc,
-			soil_moisture_percent,
-			conductivity_us_cm,
-			updated_at
-		)
-		SELECT
-			time_bucket($1::interval, ts) AS bucket,
-			mac,
-			avg(temperature_c),
-			avg(humidity_percent),
-			avg(battery_percent),
-			avg(rssi_dbm),
-			avg(pressure_hpa),
-			avg(co2_ppm),
-			avg(lux),
-			avg(etvoc),
-			avg(soil_moisture_percent),
-			avg(conductivity_us_cm),
-			now()
-		FROM ` + source + `
-		WHERE ts >= now() - $2::interval
-		GROUP BY bucket, mac
-		ON CONFLICT (ts, mac) DO UPDATE SET
-			temperature_c = EXCLUDED.temperature_c,
-			humidity_percent = EXCLUDED.humidity_percent,
-			battery_percent = EXCLUDED.battery_percent,
-			rssi_dbm = EXCLUDED.rssi_dbm,
-			pressure_hpa = EXCLUDED.pressure_hpa,
-			co2_ppm = EXCLUDED.co2_ppm,
-			lux = EXCLUDED.lux,
-			etvoc = EXCLUDED.etvoc,
-			soil_moisture_percent = EXCLUDED.soil_moisture_percent,
-			conductivity_us_cm = EXCLUDED.conductivity_us_cm,
-			updated_at = now()
-	`
-	tag, err := db.Exec(ctx, command, bucket, intervalSeconds(lookback))
+func ensureAccuracyCutoff(ctx context.Context, db *pgx.Conn) (time.Time, error) {
+	var cutoff time.Time
+	err := db.QueryRow(ctx, `
+		INSERT INTO rollup_accuracy_state (id, accuracy_cutoff)
+		SELECT true, time_bucket('1 day', COALESCE(min(ts), now())) + interval '1 day'
+		FROM sensor_minute
+		ON CONFLICT (id) DO UPDATE SET accuracy_cutoff = rollup_accuracy_state.accuracy_cutoff
+		RETURNING accuracy_cutoff
+	`).Scan(&cutoff)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("initialize rollup accuracy cutoff: %w", err)
+	}
+	log.Printf("rollup accuracy cutoff=%s", cutoff.Format(time.RFC3339))
+	return cutoff, nil
+}
+
+func refreshRollup(ctx context.Context, db execer, target string, bucket string, source string, lookback time.Duration, cutoff time.Time, weighted bool) error {
+	command := buildRollupSQL(target, source, weighted)
+	tag, err := db.Exec(ctx, command, bucket, intervalSeconds(lookback), cutoff)
 	if err != nil {
 		return err
 	}
 	log.Printf("refreshed %s from %s rows=%d", target, source, tag.RowsAffected())
 	return nil
+}
+
+func buildRollupSQL(target string, source string, weighted bool) string {
+	columns := []string{"ts", "mac"}
+	selects := []string{"time_bucket($1::interval, ts) AS bucket", "mac"}
+	updates := make([]string, 0, len(sensor.Metrics)*2+1)
+	for _, metric := range sensor.Metrics {
+		columns = append(columns, metric.Column)
+		if weighted {
+			selects = append(selects, fmt.Sprintf(
+				"CASE WHEN COALESCE(sum(%[1]s_count), 0) > 0 THEN sum(%[1]s * %[1]s_count)::double precision / sum(%[1]s_count) END",
+				metric.Column,
+			))
+		} else {
+			selects = append(selects, "avg("+metric.Column+")")
+		}
+		updates = append(updates, metric.Column+" = EXCLUDED."+metric.Column)
+	}
+	for _, metric := range sensor.Metrics {
+		countColumn := metric.Column + "_count"
+		columns = append(columns, countColumn)
+		if weighted {
+			selects = append(selects, "sum("+countColumn+")")
+		} else {
+			selects = append(selects, "count("+metric.Column+")")
+		}
+		updates = append(updates, countColumn+" = EXCLUDED."+countColumn)
+	}
+	columns = append(columns, "updated_at")
+	selects = append(selects, "now()")
+	updates = append(updates, "updated_at = now()")
+	return fmt.Sprintf(`
+		INSERT INTO %s (%s)
+		SELECT %s
+		FROM %s
+		WHERE ts >= GREATEST(now() - $2::interval, $3::timestamptz)
+		GROUP BY bucket, mac
+		ON CONFLICT (ts, mac) DO UPDATE SET %s
+	`, target, strings.Join(columns, ", "), strings.Join(selects, ", "), source, strings.Join(updates, ", "))
 }
 
 func retainSensorMinute(ctx context.Context, db execer, retain time.Duration) error {

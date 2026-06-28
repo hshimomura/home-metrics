@@ -94,6 +94,16 @@ CREATE TABLE IF NOT EXISTS sensor_1hour (
     etvoc double precision,
     soil_moisture_percent double precision,
     conductivity_us_cm double precision,
+    temperature_c_count bigint,
+    humidity_percent_count bigint,
+    battery_percent_count bigint,
+    rssi_dbm_count bigint,
+    pressure_hpa_count bigint,
+    co2_ppm_count bigint,
+    lux_count bigint,
+    etvoc_count bigint,
+    soil_moisture_percent_count bigint,
+    conductivity_us_cm_count bigint,
     updated_at timestamptz NOT NULL DEFAULT now(),
     PRIMARY KEY (ts, mac)
 );
@@ -116,6 +126,16 @@ CREATE TABLE IF NOT EXISTS sensor_12hour (
     etvoc double precision,
     soil_moisture_percent double precision,
     conductivity_us_cm double precision,
+    temperature_c_count bigint,
+    humidity_percent_count bigint,
+    battery_percent_count bigint,
+    rssi_dbm_count bigint,
+    pressure_hpa_count bigint,
+    co2_ppm_count bigint,
+    lux_count bigint,
+    etvoc_count bigint,
+    soil_moisture_percent_count bigint,
+    conductivity_us_cm_count bigint,
     updated_at timestamptz NOT NULL DEFAULT now(),
     PRIMARY KEY (ts, mac)
 );
@@ -138,6 +158,16 @@ CREATE TABLE IF NOT EXISTS sensor_1day (
     etvoc double precision,
     soil_moisture_percent double precision,
     conductivity_us_cm double precision,
+    temperature_c_count bigint,
+    humidity_percent_count bigint,
+    battery_percent_count bigint,
+    rssi_dbm_count bigint,
+    pressure_hpa_count bigint,
+    co2_ppm_count bigint,
+    lux_count bigint,
+    etvoc_count bigint,
+    soil_moisture_percent_count bigint,
+    conductivity_us_cm_count bigint,
     updated_at timestamptz NOT NULL DEFAULT now(),
     PRIMARY KEY (ts, mac)
 );
@@ -160,6 +190,12 @@ CREATE TABLE IF NOT EXISTS collector_status (
     consecutive_failures integer NOT NULL DEFAULT 0,
     updated_at timestamptz NOT NULL DEFAULT now(),
     PRIMARY KEY (collector_name, target_type, target_key)
+);
+
+CREATE TABLE IF NOT EXISTS rollup_accuracy_state (
+    id boolean PRIMARY KEY DEFAULT true CHECK (id),
+    accuracy_cutoff timestamptz NOT NULL,
+    initialized_at timestamptz NOT NULL DEFAULT now()
 );
 
 CREATE TABLE IF NOT EXISTS energy_devices (

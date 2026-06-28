@@ -11,6 +11,8 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"home-metrics/internal/sensor"
+
 	"github.com/jackc/pgx/v5"
 )
 
@@ -29,17 +31,14 @@ type sensorField struct {
 	Unit   string
 }
 
-var sensorFields = []sensorField{
-	{Name: "Temperature", Column: "temperature_c", Unit: "C"},
-	{Name: "Humidity", Column: "humidity_percent", Unit: "%RH"},
-	{Name: "Battery", Column: "battery_percent", Unit: "%"},
-	{Name: "RSSI", Column: "rssi_dbm", Unit: "dBm"},
-	{Name: "Pressure", Column: "pressure_hpa", Unit: "hPa"},
-	{Name: "CO2", Column: "co2_ppm", Unit: "ppm"},
-	{Name: "Lux", Column: "lux", Unit: "lux"},
-	{Name: "eTVOC", Column: "etvoc", Unit: ""},
-	{Name: "Soil moisture", Column: "soil_moisture_percent", Unit: "%"},
-	{Name: "Conductivity", Column: "conductivity_us_cm", Unit: "uS/cm"},
+var sensorFields = buildSensorFields()
+
+func buildSensorFields() []sensorField {
+	fields := make([]sensorField, 0, len(sensor.Metrics))
+	for _, metric := range sensor.Metrics {
+		fields = append(fields, sensorField{Name: metric.DisplayName, Column: metric.Column, Unit: metric.Unit})
+	}
+	return fields
 }
 
 func main() {

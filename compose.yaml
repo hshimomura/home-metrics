@@ -44,6 +44,7 @@ services:
       CISCO_SPACES_COLLECTOR_ENABLED: ${CISCO_SPACES_COLLECTOR_ENABLED:-false}
       CISCO_SPACES_ALLOW_SECONDARY: ${CISCO_SPACES_ALLOW_SECONDARY:-false}
       COLLECTOR_STATUS_STALE_AFTER: ${COLLECTOR_STATUS_STALE_AFTER:-5m}
+      GATT_CONTROL_STATUS_STALE_AFTER: ${GATT_CONTROL_STATUS_STALE_AFTER:-26h}
     ports:
       - "${API_BIND_ADDR:-0.0.0.0}:${API_PORT:-8080}:8080"
     command: ["hm-api-server"]
@@ -102,7 +103,6 @@ services:
       CISCO_SPACES_DRY_RUN: ${CISCO_SPACES_DRY_RUN:-false}
       CISCO_SPACES_ALLOW_SECONDARY: ${CISCO_SPACES_ALLOW_SECONDARY:-false}
       CISCO_SPACES_DEBUG: ${CISCO_SPACES_DEBUG:-false}
-      CISCO_SPACES_PRUNE_CONFIGURED_BLE_SENSORS: ${CISCO_SPACES_PRUNE_CONFIGURED_BLE_SENSORS:-true}
     volumes:
       - ${SENSORS_FILE:-./examples/sensors.json.example}:/etc/home-metrics/sensors.json:ro
     command: ["hm-cisco-spaces-collector"]
