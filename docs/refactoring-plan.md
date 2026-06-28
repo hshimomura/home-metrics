@@ -1,6 +1,6 @@
 # Home Metrics Refactoring Plan
 
-Status: implemented - deployment verification pending  
+Status: implemented and deployed
 Last reviewed: 2026-06-28
 
 ## 目的
@@ -300,7 +300,7 @@ metadata categoryは原則として `sensor_types.category` から解決しま�
 `devices.sensor_category` をoverrideとして維持する場合は、overrideの用途を明示し、
 通常時の不一致をDB checkで検出します。
 
-### Phase 6: Weighted rollup migration（実装完了、デプロイ待ち）
+### Phase 6: Weighted rollup migration（完了）
 
 1. rollup tableへmetric別count列を追加します。
 2. 最古の保持時刻から最初の完全な1日bucket境界を `accuracy_cutoff` として記録します。
@@ -352,6 +352,26 @@ collector statusとして表示できるようにします。
 
 Phase 1の本番確認では、MQTTと各GATT端末のstatusが独立していること、全sensorのminute
 データが継続していること、`conn busy` が再発していないことを重点的に確認します。
+
+## 本番検証結果
+
+2026-06-28にCI、Container workflow、servicecore check、nms4 deployの完了後、次を
+確認しました。
+
+- nms4のAPI、DB maintenance、Cisco Sensor Connect、Nature Remo、APC UPS、ECHONET
+  collectorが公開済みimageで稼働しています。
+- migration `0017_add_weighted_rollup_counts` が適用されています。
+- `rollup_accuracy_state.accuracy_cutoff` は `2026-06-15 09:00:00+09:00` です。
+- 1時間rollupにmetric別countが保存され、12時間・1日rollupも正常に再生成されました。
+- Cisco Sensor Connectの10端末すべてでminute telemetryが継続しています。
+- MQTT targetはfailureなしで更新され、API healthは `status=ok`、stale collectorは0です。
+- collectorログに `conn busy`、ownership conflict、panicはありません。
+- Cisco Spaces collectorは停止状態を維持し、active collector statusの集計対象外です。
+
+GATTは24時間に1回の端末別scheduleで動作します。デプロイ直後に未実行の端末はstatus rowを
+持ちません。実行後は正規化MACごとの `gatt_control` rowへ成功、データ取得、失敗を記録し、
+MQTT targetとは独立してhealthを評価します。この分離と部分成功時の状態遷移は自動テストでも
+検証します。
 
 ## 最終完了条件
 
