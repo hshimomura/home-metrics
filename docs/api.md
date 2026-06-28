@@ -67,8 +67,39 @@ Returns all configured devices, including disabled devices. Each item contains:
 - optional joined `sensor_type` details;
 - optional client-facing `sensor_category`.
 
-Clients should classify devices with `sensor_category`. See
-`docs/client-contract.md`.
+Clients must use server-provided metadata rather than labels, MAC prefixes,
+collector process names, or recent metric presence:
+
+| Field | Meaning |
+| --- | --- |
+| `ingest_source` | Telemetry transport and owning collector. |
+| `sensor_type_code` | Stable decoder/model identifier. |
+| `sensor_type` | Optional display metadata joined from `sensor_types`. |
+| `sensor_category` | Client-facing category such as `plant` or `environment`. |
+| `enabled` | Whether the owning collector enables the device. |
+
+Normal device lists should include `enabled == true`. Plant views should select
+`sensor_category == "plant"`. A latest-reading `404` does not remove a
+configured device; clients should keep it visible with a no-data state.
+
+Metric semantics are stable across latest and series responses:
+
+| Key | Meaning | Unit |
+| --- | --- | --- |
+| `temperature_c` | Temperature | C |
+| `humidity_percent` | Air relative humidity | %RH |
+| `battery_percent` | Device battery | % |
+| `rssi_dbm` | Received signal strength | dBm |
+| `pressure_hpa` | Air pressure | hPa |
+| `co2_ppm` | Carbon dioxide | ppm |
+| `lux` | Illuminance | lux |
+| `etvoc` | Equivalent total volatile organic compounds | device-defined |
+| `soil_moisture_percent` | Soil moisture | % |
+| `conductivity_us_cm` | Soil conductivity | uS/cm |
+
+Soil moisture must not be substituted for air humidity. The stable conductivity
+name is `conductivity_us_cm`; user interfaces should label it `Conductivity` or
+`導電率`, not `Fertility`.
 
 ### `GET /api/devices/{mac}/latest`
 
@@ -112,6 +143,10 @@ The response is:
 
 Series data follows stored measurement timing. Sparse values are not carried
 forward.
+
+For compatibility, clients should treat optional metadata as optional, ignore
+unknown future metric keys, use `value_timestamps` when metric age matters, and
+avoid all removed classification fields.
 
 ## Energy
 
