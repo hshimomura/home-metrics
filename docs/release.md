@@ -1,146 +1,142 @@
-# Release and Deployment
+# Release And Deployment
 
-`home-metrics` is the canonical server-side source repository.
+GitHub is the canonical source repository. CI validates the Go code and API
+contract; the Container workflow publishes the runtime image. Production on
+`nms4` is managed by `ioslab-docs/servicecore`.
 
-The production deployment is managed by `ioslab-docs/servicecore`; this repository publishes
-the server image and API contract artifacts that `servicecore` and `RoomPlus` consume.
-
-## Repository Policy
-
-- GitHub is the canonical repository for server development.
-- The repository is public.
-- Container images are published to public GHCR.
-- `servicecore` should deploy by image digest, not by a moving tag.
-
-## Container Image
-
-Image name:
+## Published Image
 
 ```text
 ghcr.io/hshimomura/home-metrics
 ```
 
-Tags:
+The Container workflow publishes:
 
-- `main`: latest image built from the main branch
-- `sha-<short-sha>`: traceable development image
-- `vX.Y.Z`: release image
+- `main` for the latest main-branch build;
+- `sha-<short-sha>` for a traceable commit build;
+- `vX.Y.Z` for a release tag.
 
-During active development, `servicecore` deploys the digest resolved from the `main` tag.
-After the service settles, production deploys should move to digests resolved from `vX.Y.Z`
-release tags.
-
-Deployment should always use a digest, not the moving tag itself.
-
-Example:
+Deploy by immutable digest, never by a moving tag:
 
 ```text
 ghcr.io/hshimomura/home-metrics@sha256:<digest>
 ```
 
-After the first publish, verify that the GHCR package visibility is public in GitHub package
-settings. The deployment model assumes public pull access from `nms4`.
+## CI Contract
 
-## Release Flow
+The CI workflow runs:
 
-Active development flow:
+```sh
+make test
+make build
+npx --yes @redocly/cli@1.34.5 lint docs/openapi.yaml
+```
 
-1. Merge server-side changes to `main`.
-2. Confirm CI passes.
-3. Confirm the Container workflow publishes `ghcr.io/hshimomura/home-metrics:main`.
-4. Confirm whether the change needs a DB migration.
-5. If migration is required, make it explicit in the PR or release note and confirm it
-   manually before the `servicecore` deploy.
-6. Update `ioslab-docs/servicecore` to use the digest resolved from `main`.
-7. Let `servicecore-docker-check` and `servicecore-docker-nms4-deploy` apply the change.
+`make build` compiles every command listed in `tools/build.sh`. Sensor contract
+tests also verify that the canonical metric registry is represented in the
+schema, weighted-rollup migration, OpenAPI contract, and web UI.
 
-Stable release flow:
+## Database Migrations
 
-1. Merge server-side changes to `main`.
-2. Confirm CI passes.
-3. Create a release tag such as `v1.2.3`.
-4. Confirm the Container workflow publishes `ghcr.io/hshimomura/home-metrics:v1.2.3`.
-5. Confirm whether the change needs a DB migration.
-6. If migration is required, make it explicit in the release note and confirm it manually
-   before the `servicecore` deploy.
-7. Update `ioslab-docs/servicecore` to use the digest resolved from the release tag.
-8. Let `servicecore-docker-check` and `servicecore-docker-nms4-deploy` apply the change.
+`db/schema.sql` is the latest fresh-install snapshot. `db/migrations/*.sql`
+upgrades existing databases. Follow these rules:
 
-## API Contract
+1. Never edit a migration that may have been applied.
+2. Add a new numbered migration for every existing-volume schema change.
+3. Update `db/schema.sql` to the same final state.
+4. Keep migration SQL compatible with `hm-db-migrate` checksum validation.
+5. Make API and collectors depend on successful migration completion.
 
-`RoomPlus` must follow the API contract published by `home-metrics`.
+For a new database initialized from `db/schema.sql`, `hm-db-migrate` records
+the migrations represented by that snapshot as its baseline. Existing volumes
+apply only unapplied migrations.
 
-The API contract is maintained in this repository:
+Migration `0017_add_weighted_rollup_counts.sql` adds metric-specific rollup
+counts and `rollup_accuracy_state`. The first maintenance run initializes an
+immutable accuracy cutoff and rebuilds only complete retained buckets at or
+after it. Do not reset that cutoff during a normal release.
 
-- `docs/openapi.yaml` is linted in CI.
-- `docs/api.md` explains the implemented REST behavior.
-- `RoomPlus` validates its handwritten API client against the server contract.
-- Breaking API changes are coordinated with RoomPlus and deployment changes.
+## Main-Branch Deployment
 
-Generated Swift client code is not used for now. Revisit generation after the API surface
-grows enough that the handwritten client becomes costly to maintain.
+1. Push or merge the home-metrics change to `main`.
+2. Confirm both `CI` and `Container` complete successfully.
+3. Read the digest from the Container workflow summary.
+4. In `ioslab-docs`, update the servicecore home-metrics digest.
+5. Run the local servicecore Docker check and deployment contract tests.
+6. Commit and push the servicecore change.
+7. Confirm `Servicecore / Docker / check` and
+   `Servicecore / Docker / deploy` complete for nms4.
+8. Verify the running containers and data path on nms4.
 
-## Current Operational Scope
+The servicecore helper resolves and updates the current `main` digest:
 
-The current server scope is sensor readings, energy readings, and collector
-status. Alarm rules, APNs push notifications, admin webhook delivery, and
-maintenance mode were removed. Migration `0008_drop_alarm_features.sql` drops
-the old alarm/APNs/webhook tables and device maintenance columns, so deployments
-that have not yet applied it should treat it as a deliberate schema cleanup.
+```sh
+./servicecore/scripts/update-home-metrics-digest.sh main
+./servicecore/scripts/check-docker-host.sh nms4
+./servicecore/scripts/test-docker-deploy-contract.sh
+```
 
-Cisco Spaces raw event storage has also been retired. Migration
-`0011_drop_cisco_spaces_raw_events.sql` drops the existing
-`cisco_spaces_raw_events` table, which deletes any raw firehose payloads kept for
-debug/replay. After this migration, Cisco Spaces collection stores only
-normalized `sensor_minute` readings and `collector_status`; raw event export and
-replay are no longer part of the operational model.
+## Tagged Release
 
-Xiaomi Flower Care / MiFlora style plant sensors are supported through Cisco
-Sensor Connect advertisement telemetry. Migration
-`0012_add_plant_sensor_metrics.sql` adds `soil_moisture_percent` and
-`conductivity_us_cm` to `sensor_minute` and the rollup tables so plant readings
-can use the same latest/series API and web UI as the existing environmental
-metrics.
-Flower Care battery can be polled through Cisco Sensor Connect GATT control when
-`gatt_battery` is configured for a device. The poller defaults to one read every
-24 hours plus or minus 30 minutes, requires a recent advertisement before
-connecting, stores `battery_percent`, and disconnects immediately after the
-read. When `history_backfill` is explicitly enabled in the same block, the
-collector reads Flower Care history entries through short one-entry GATT
-sessions and upserts sparse hourly points into `sensor_minute` without
-overwriting non-null advertisement values. Flower Care real-time GATT reads and
-firmware storage are not part of the operational model. The collector also does
-not clear on-device history; that cleanup remains tied to smartphone app sync.
-`/api/devices/{mac}/latest` now builds a metric-level latest snapshot: `values`
-contains the latest non-null value for each metric, and `value_timestamps`
-records the measurement timestamp for metrics that have a value. This keeps
-sparse GATT battery readings visible without copying old values into later
-`sensor_minute` rows. `/api/devices/{mac}/series` remains based on original
-measurement timestamps.
+1. Complete and verify the main-branch deployment.
+2. Create an annotated `vX.Y.Z` tag from the verified commit.
+3. Push the tag and confirm the Container workflow publishes it.
+4. Create a GitHub Release describing API, schema, collector, and operational
+   changes.
+5. Resolve the release-tag digest and update servicecore if production should
+   pin the release image rather than the main image.
 
-Device classification now uses explicit metadata fields:
+Do not put an unverified digest in release notes. The tag-triggered build can
+produce a different manifest digest from an earlier main build.
 
-- `ingest_source`
-- `sensor_type_code`
-- `sensor_type`
-- `sensor_category`
+## nms4 Verification
 
-Sensor ingestion now enforces one-device/one-collector ownership through
-`devices.ingest_source`. A configured source can claim a previous `NULL` owner,
-but a different non-null owner is rejected. Disabled devices remain part of
-configuration reconciliation, allowing the same owner to disable and re-enable
-them. Cisco Spaces startup no longer prunes configured devices.
+From `/srv/docker/home-metrics`, verify the expected profiles and image:
 
-Cisco Sensor Connect now uses a PostgreSQL connection pool and waits for GATT
-workers before final shutdown flush. MQTT reconnect backoff resets after a
-successful connection and subscription. GATT status is independent per device
-using `target_type=gatt_control` and the normalized MAC address. The API health
-summary gives these low-frequency targets a separate 26-hour stale window.
+```sh
+docker compose \
+  --profile cisco-iot \
+  --profile nature-remo \
+  --profile apcupsd \
+  --profile echonet \
+  ps
 
-Migration `0017_add_weighted_rollup_counts.sql` adds a sample count for every
-metric in each rollup table. `hm-db-maint` records an immutable
-`accuracy_cutoff`, rebuilds only complete retained buckets at or after it, and
-uses metric-specific counts for weighted 12-hour and daily averages. Older
-averages remain unchanged because their source counts are unavailable. The
-accuracy guarantee is the average of non-null `sensor_minute` values, not raw
-advertisement packets.
+docker inspect -f '{{.Name}} {{.Config.Image}} {{.State.Status}}' \
+  home-metrics-hm-api-server-1 \
+  home-metrics-hm-db-maint-1 \
+  home-metrics-hm-cisco-iot-orchestrator-collector-1
+```
+
+Verify schema and collector status:
+
+```sh
+docker compose exec -T db psql -U home_metrics -d ble_sensors -P pager=off \
+  -c 'select version,name,applied_at from schema_migrations order by version desc limit 5;'
+
+docker compose exec -T db psql -U home_metrics -d ble_sensors -P pager=off \
+  -c 'select collector_name,target_type,target_key,last_success_at,last_data_at,last_error,consecutive_failures from collector_status order by collector_name,target_type,target_key;'
+```
+
+Use the configured token without printing it:
+
+```sh
+curl -H "Authorization: Bearer $API_TOKEN" \
+  https://metrics.ioslab.jp/api/health/details
+```
+
+The final verification should establish:
+
+- every running application container uses the pinned digest;
+- migration completed successfully;
+- API health is `ok` and no expected collector is stale;
+- recent telemetry exists for enabled devices;
+- logs contain no `conn busy`, ownership conflict, panic, or fatal error;
+- Cisco Spaces remains stopped and excluded when intentionally disabled.
+
+## Rollback
+
+Application rollback means restoring the previous known-good servicecore image
+digest and redeploying. A database migration is not automatically reversible.
+Before releasing a destructive migration, document its data impact and a
+specific restore procedure. Never point an older binary at a schema it cannot
+understand merely because the image rollback succeeded.

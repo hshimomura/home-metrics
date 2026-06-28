@@ -1,215 +1,172 @@
 # home-metrics
 
-Home Metrics stores BLE environmental sensor data, energy readings, and
-collector runtime status in PostgreSQL/TimescaleDB. The web UI shows current and
-historical measurements. The admin UI is intentionally limited to collector and
-operational status.
+Home Metrics collects environmental, plant, energy, and UPS measurements into
+PostgreSQL/TimescaleDB. It provides a read-only REST API, a metrics page, and an
+admin page for collector and schema status.
 
-Alarm rules, APNs push notifications, notification history, admin webhook
-delivery, and sensor maintenance mode are not part of the current implementation.
+The current service does not implement alert rules, APNs, webhooks,
+notification history, or device maintenance controls. It stores normalized
+sensor and energy readings rather than raw Cisco MQTT or Firehose payloads.
 
-## Layout
+## Components
 
 ```text
-cmd/hm-api-server/                     REST API and web UI
-cmd/hm-ble-collector/                  local BLE scanner collector
-cmd/hm-cisco-spaces-collector/         Cisco Spaces firehose collector
+cmd/hm-api-server/                     REST API and web pages
+cmd/hm-db-migrate/                     immutable schema migrations
+cmd/hm-db-maint/                       sensor rollups and retention
+cmd/hm-db-check/                       database consistency checks
+cmd/hm-ble-collector/                  local BlueZ BLE advertisements
 cmd/hm-cisco-iot-orchestrator-collector/
-                                       Cisco Sensor Connect (IoT Orchestrator) MQTT collector
-cmd/hm-db-migrate/                     schema migration CLI
-cmd/hm-db-maint/                       rollup refresh and retention CLI
-cmd/hm-nature-remo-collector/          Nature Remo energy collector
-cmd/hm-echonet-collector/              ECHONET Lite energy collector
-cmd/hm-apcupsd-collector/              APC UPS energy collector
-db/schema.sql                          fresh DB schema
-db/migrations/                         incremental migrations
-docs/api.md                            REST API reference
-docs/openapi.yaml                      OpenAPI summary
-docs/refactoring-plan.md               reviewed staged refactoring plan
-docs/xiaomi-flower-care-cisco-sensor-connect.md
-                                       Xiaomi Flower Care preparation notes
+                                       Cisco Sensor Connect MQTT and GATT
+cmd/hm-cisco-spaces-collector/         optional Cisco Spaces Firehose
+cmd/hm-nature-remo-collector/          Nature Remo power
+cmd/hm-echonet-collector/              ECHONET Lite energy
+cmd/hm-apcupsd-collector/              APC UPS metrics
+cmd/hm-energy-influx-import/           supported historical energy import
+internal/sensor/                       canonical sensor metric model
+internal/sensorstore/                  ownership and sparse DB writes
+db/schema.sql                          current fresh-install schema
+db/migrations/                         incremental existing-DB migrations
 web/                                   metrics and admin pages
 ```
 
-`cmd/hm-api-server/` is split by responsibility:
+## Documentation
 
-- `main.go`: process startup, database connection, graceful shutdown.
-- `server.go`: routing, web file serving, auth, CORS, and JSON helpers.
-- `sensors.go`: sensor device, latest value, and sensor series endpoints.
-- `energy.go`: energy latest and series endpoints.
-- `admin_status.go`: collector/admin status endpoints.
-- `admin_types.go`: admin response types and small PostgreSQL helpers.
-- `config.go`: environment parsing helpers.
+- [Documentation map](docs/README.md)
+- [Architecture](docs/architecture.md)
+- [REST API](docs/api.md)
+- [OpenAPI contract](docs/openapi.yaml)
+- [Client contract](docs/client-contract.md)
+- [Release and deployment](docs/release.md)
+- [Xiaomi Flower Care](docs/xiaomi-flower-care-cisco-sensor-connect.md)
 
 ## Data Model
 
-Main tables:
+Sensor identity and classification live in `devices` and `sensor_types`.
+Normalized sensor telemetry is stored in `sensor_minute`; one-hour, 12-hour,
+and daily tables hold averages plus metric-specific sample counts. Plant
+metrics use dedicated `soil_moisture_percent` and `conductivity_us_cm` columns.
 
-- `devices`: configured BLE/environment sensors.
-- `sensor_types`: stable sensor model/decoder metadata used for client
-  categorization.
-- `sensor_minute`: one row per device/minute. Collectors store minute-level
-  median samples for environmental values.
-- `sensor_1hour`, `sensor_12hour`, `sensor_1day`: metric averages and
-  metric-specific sample counts refreshed by `hm-db-maint`.
-- `rollup_accuracy_state`: immutable cutoff after which weighted rollups are
-  guaranteed to be based on complete retained minute buckets.
-- `energy_devices`, `energy_readings`, `energy_metric_definitions`: power and
-  energy readings.
-- `collector_status`: one row per collector target, updated by collectors.
-- `schema_migrations`: migration state.
+`hm-db-maint` refreshes rollups and deletes expired minute data. The Compose
+defaults are 14 days for both refresh lookback and minute retention. Weighted
+12-hour and daily averages are guaranteed only at or after the immutable
+`rollup_accuracy_state.accuracy_cutoff`; older averages are preserved because
+their original counts are unavailable.
 
-Migration `0008_drop_alarm_features.sql` removes the previous alarm/APNs/webhook
-tables and the old device maintenance columns from existing databases.
-Migration `0011_drop_cisco_spaces_raw_events.sql` removes the retired Cisco
-Spaces raw event table from existing databases. Cisco Spaces firehose data is
-now decoded directly into `sensor_minute`; the collector keeps runtime state in
-`collector_status` and no longer stores raw firehose payloads for replay/export.
-Migration `0012_add_plant_sensor_metrics.sql` adds plant sensor columns
-(`soil_moisture_percent` and `conductivity_us_cm`) to `sensor_minute` and all
-rollup tables.
-Migration `0017_add_weighted_rollup_counts.sql` adds metric-specific sample
-counts and `rollup_accuracy_state`. On first maintenance after migration, the
-service records the first complete one-day bucket after the oldest retained
-minute as `accuracy_cutoff`. Buckets at or after that cutoff are rebuilt from
-`sensor_minute` and higher rollups use weighted averages. Older averages are
-kept because their original sample counts cannot be reconstructed.
-`db/schema.sql` is a latest-state fresh DB snapshot. On a fresh database,
-`hm-db-migrate` detects that snapshot and records the existing migrations as the
-baseline before applying future migrations.
+Energy and UPS values use `energy_devices`, `energy_readings`, and
+`energy_metric_definitions`. Collector runtime state uses `collector_status`.
+
+`db/schema.sql` is the current fresh-install snapshot. Existing databases are
+upgraded by `hm-db-migrate`; migration files are immutable after deployment.
 
 ## Configuration
 
-Use `examples/home-metrics.env.example` or
-`examples/home-metrics.compose.env.example` as the starting point.
+Use one of these templates:
 
-For direct, non-Docker collector runs, set `SENSOR_INGEST_SOURCE` for the
-collector command you are starting. For Docker Compose, collector-specific
-profile variables such as `CISCO_IOT_ORCH_INGEST_SOURCE` are mapped to
-`SENSOR_INGEST_SOURCE` inside the service definition.
+- `examples/home-metrics.compose.env.example` for Docker Compose
+- `examples/home-metrics.env.example` for direct command or systemd use
+- `examples/sensors.json.example` for sensor ownership and decoder metadata
 
-Common API settings:
+Common API and status settings:
 
 ```sh
 API_TOKEN=change-me
-API_REQUIRE_TOKEN=false
-API_ALLOWED_ORIGINS=http://localhost:8080
+API_REQUIRE_TOKEN=true
+API_ALLOWED_ORIGINS=https://example.invalid
 COLLECTOR_STATUS_STALE_AFTER=5m
 GATT_CONTROL_STATUS_STALE_AFTER=26h
 CISCO_SPACES_COLLECTOR_ENABLED=false
 ```
 
-`COLLECTOR_STATUS_STALE_AFTER` controls `/api/health/details` and the admin UI
-summary. A collector is stale when it has never succeeded, has consecutive
-failures, or has not updated within this duration.
-Low-frequency GATT status uses `GATT_CONTROL_STATUS_STALE_AFTER` instead. Its
-26-hour default covers the 24-hour poll interval plus configured jitter.
+Every configured sensor should set `ingest_source`. The supported ownership
+values are collector-specific; the Cisco Sensor Connect database value is
+`cisco_sensor_connect`. Docker Compose maps `BLE_INGEST_SOURCE`,
+`CISCO_SPACES_INGEST_SOURCE`, and `CISCO_IOT_ORCH_INGEST_SOURCE` to
+`SENSOR_INGEST_SOURCE` inside their respective containers. For a direct command,
+set `SENSOR_INGEST_SOURCE` itself.
 
-`hm-cisco-spaces-collector` is an optional profile. Keep
-`CISCO_SPACES_COLLECTOR_ENABLED=false` when it is intentionally stopped; the
-admin summary will show it as disabled instead of treating the stale
-`collector_status` row as an alert. Set it to `true` only when the Cisco Spaces
-firehose collector is expected to be running.
-
-The Cisco Spaces firehose collector does not keep a raw event database. It
-decodes incoming events and stores only the normalized minute-level sensor data
-plus collector status.
-Starting the Cisco Spaces collector does not prune or disable devices. Device
-ownership and enablement are changed only by the collector that owns the
-matching `devices.ingest_source`.
+One device has one owning collector. An explicit source may claim a database
+device whose owner is `NULL`, but it cannot overwrite another non-null source.
+The owner can synchronize `enabled=false` and later re-enable the device.
 
 ## Docker Compose
 
-Start the API, migration, and maintenance services:
+Start the core services:
 
 ```sh
-docker compose up -d --build hm-api-server hm-db-maint
+docker compose up -d db hm-db-migrate hm-db-maint hm-api-server
 ```
 
-Enable Cisco Spaces firehose collection:
-
-```sh
-docker compose --profile cisco-spaces up -d hm-cisco-spaces-collector
-```
-
-Enable Cisco Sensor Connect (IoT Orchestrator) collection:
+Enable the collectors needed by the deployment:
 
 ```sh
 docker compose --profile cisco-iot up -d hm-cisco-iot-orchestrator-collector
+docker compose --profile nature-remo up -d hm-nature-remo-collector
+docker compose --profile apcupsd up -d hm-apcupsd-collector
+docker compose --profile echonet up -d hm-echonet-collector
 ```
 
-## Cisco Sensor Connect (IoT Orchestrator)
-
-The `hm-cisco-iot-orchestrator-collector` command receives BLE advertisements
-from the IoT Orchestrator MQTT broker and exports decoded temperature, humidity,
-battery, RSSI, lux, CO2, pressure, eTVOC, soil moisture, and conductivity values
-to `sensor_minute`.
-
-The internal collector, profile, and environment variable names intentionally
-keep `cisco_iot_orchestrator` / `CISCO_IOT_ORCH_*` because they identify the
-IoT Orchestrator endpoint. User-facing device labels use
-`Cisco Sensor Connect (IoT Orchestrator)`.
-
-Required application IDs and API keys:
-
-- onboarding app: `CISCO_IOT_ORCH_ONBOARD_APP_ID` /
-  `CISCO_IOT_ORCH_ONBOARD_API_KEY`
-- control app: `CISCO_IOT_ORCH_CONTROL_APP_ID` /
-  `CISCO_IOT_ORCH_CONTROL_API_KEY`
-- data app: `CISCO_IOT_ORCH_DATA_APP_ID` /
-  `CISCO_IOT_ORCH_DATA_API_KEY`
-
-For the current lab, the data topic is:
+Other optional sensor paths:
 
 ```sh
+docker compose --profile ble up -d hm-ble-collector
+docker compose --profile cisco-spaces up -d hm-cisco-spaces-collector
+```
+
+The Cisco Spaces profile is intentionally optional. Keep
+`CISCO_SPACES_COLLECTOR_ENABLED=false` while it is stopped so old status rows do
+not degrade health. Set it to `true` only when the profile is expected to run.
+Starting it does not prune or disable configured devices.
+
+## Cisco Sensor Connect
+
+`hm-cisco-iot-orchestrator-collector` receives BLE advertisement telemetry from
+the Cisco Sensor Connect (IoT Orchestrator) MQTT endpoint. The internal command,
+profile, and environment variables retain the `cisco_iot_orchestrator` and
+`CISCO_IOT_ORCH_*` names; the database ownership value is
+`cisco_sensor_connect`.
+
+Use separate application IDs and API keys for onboarding, control, and data:
+
+```sh
+CISCO_IOT_ORCH_ONBOARD_APP_ID=onboard
+CISCO_IOT_ORCH_ONBOARD_API_KEY=...
+CISCO_IOT_ORCH_CONTROL_APP_ID=control
+CISCO_IOT_ORCH_CONTROL_API_KEY=...
+CISCO_IOT_ORCH_DATA_APP_ID=data
+CISCO_IOT_ORCH_DATA_API_KEY=...
 CISCO_IOT_ORCH_TOPIC=ioslab/home-metrics/ble/advertisements/v1
 ```
 
-Important setup sequence:
+The orchestrator-side setup order is:
 
-1. Register the target BLE devices with the onboarding app.
-2. Register the data app with `registerDataApp`.
-3. Register the advertisement topic with `registerTopic`.
-4. Subscribe each BLE device to the data topic.
-5. Start `hm-cisco-iot-orchestrator-collector` and verify `collector_status`
-   plus `sensor_minute`.
+1. SCIM onboard each BLE device with the onboarding application.
+2. Register the data application.
+3. Register the advertisement topic.
+4. Subscribe each device to that topic.
+5. Start the collector and verify MQTT status and minute telemetry.
 
-The implementation treats advertisement telemetry as the source of truth. It
-does not store raw MQTT/protobuf telemetry payloads. The collector decodes each
-MQTT message in memory, keeps only minute-level aggregate windows, writes the
-median values to `sensor_minute`, and drops successfully flushed windows.
-`CISCO_IOT_ORCH_AGGREGATE_FLUSH_INTERVAL` controls periodic aggregate flushes
-so the last minute is written even if no later MQTT message arrives. If database
-writes fail, pending aggregate windows are retained and summarized in logs at
-`CISCO_IOT_ORCH_PENDING_LOG_INTERVAL`.
+The collector decodes MQTT/protobuf messages in memory, merges sparse BLE
+objects into per-minute windows, and stores median values. Successful windows
+are discarded; failed DB writes remain pending for retry. MQTT reconnect delay
+resets after connect and subscribe succeed.
 
-Sensor ownership is one device to one collector. The database ownership value
-for this collector is `cisco_sensor_connect`; command/profile aliases such as
-`cisco_iot_orchestrator` are not stored as ownership. A configured source may
-claim a device whose existing `ingest_source` is `NULL`, but a different
-non-null owner is rejected. Disabled configured devices are synchronized to the
-database and can be re-enabled by the same owner. Source migration must stop the
-old collector, conditionally update the expected old source, update the sensor
-configuration, and then start the new collector.
+### Optional Flower Care GATT
 
-Xiaomi Flower Care / MiFlora plant support also uses advertisement telemetry
-for temperature, illuminance, soil moisture, and conductivity. Flower Care
-battery and firmware are exposed through connected GATT reads, so the collector
-can optionally poll the battery characteristic at a very low frequency. The same
-low-frequency GATT poll can also backfill sparse hourly Flower Care history
-entries when `history_backfill` is explicitly enabled. Configure this per device
-with `gatt_battery` in `sensors.json`; devices without that block remain
-advertisement-only.
-
-Example Flower Care target:
+Xiaomi Flower Care advertisements provide temperature, illuminance, soil
+moisture, and conductivity. Battery and firmware require a connected GATT read.
+Add a `gatt_battery` block to a Flower Care target only when battery visibility
+is needed:
 
 ```json
 {
   "mac": "5C:85:7E:14:73:7D",
   "label": "Blueberry1",
+  "location": "Greenhouse",
   "ingest_source": "cisco_sensor_connect",
   "sensor_type_code": "xiaomi_flower_care",
   "sensor_category": "plant",
+  "enabled": true,
   "gatt_battery": {
     "enabled": true,
     "device_id": "48c71db0-ce81-43c2-849f-5da7fef23ec4",
@@ -224,54 +181,21 @@ Example Flower Care target:
 }
 ```
 
-The scheduler uses the latest stored `battery_percent` to choose the next
-polling time, then adds random jitter. With the default settings, a configured
-plant sensor is polled once every 24 hours plus or minus 30 minutes. Before
-connecting, the collector verifies that a recent advertisement was received; if
-the latest telemetry is older than `advertisement_max_age`, the GATT poll is
-skipped and retried later. Each successful poll connects through the control
-API, reads `1a02`, stores `battery_percent`, and disconnects. If
-`history_backfill` is true, the collector then reads Flower Care history service
-`1206` with one short GATT connection per entry, maps device-relative timestamps
-to wall-clock minutes, and upserts the sparse points into `sensor_minute` without
-overwriting existing non-null advertisement values. History backfill defaults to
-off and should stay conservative because connected GATT can pause advertisements
-while the session is open. GATT control sessions are serialized inside the
-collector so battery and history reads do not overlap. The collector does not
-clear on-device Flower Care history; sensor-side history cleanup is left to the
-official smartphone app sync path.
+The collector requires a recent advertisement, serializes control sessions,
+connects, reads, stores `battery_percent`, and disconnects. It schedules the
+next read at 24 hours plus or minus jitter. Firmware is logged but not stored.
+`history_backfill` is opt-in and defaults to false; when enabled it reads up to
+the configured number of hourly history entries with short GATT sessions. The
+collector never clears history from the device.
 
-MQTT and GATT health are independent. MQTT uses its broker/topic target. Each
-GATT device uses `target_type=gatt_control` and its normalized MAC address as
-`target_key`. If battery storage succeeds but a following history read fails,
-`last_data_at` is updated and the final GATT health remains failed until a later
-successful retry.
+MQTT and GATT status are independent. Each GATT device has
+`target_type=gatt_control` and normalized MAC as `target_key`.
 
-See
-[docs/xiaomi-flower-care-cisco-sensor-connect.md](docs/xiaomi-flower-care-cisco-sensor-connect.md)
-for preparation notes for testing Xiaomi Flower Care / MiFlora plant sensors.
-
-## Web UI
+## API And Web
 
 - Metrics UI: `http://localhost:8080/`
 - Admin UI: `http://localhost:8080/admin`
-
-The admin UI shows:
-
-- collector summary from `/api/health/details`
-- Cisco Spaces firehose lock and status from `/api/admin/cisco-spaces-firehose`
-- all collector status rows from `/api/admin/collector-status`
-- schema migration status from `/api/admin/schema`
-
-The admin UI does not expose alarm, webhook, APNs, or maintenance controls.
-
-This is intentional: collector visibility is provided through
-`collector_status`. Automated alarm evaluation, webhook delivery, APNs delivery,
-and user notification history were removed to keep operations simple.
-
-## API
-
-See [docs/api.md](docs/api.md) and [docs/openapi.yaml](docs/openapi.yaml).
+- API reference: [docs/api.md](docs/api.md)
 
 Implemented endpoints:
 
@@ -283,10 +207,14 @@ GET /api/devices/{mac}/latest
 GET /api/devices/{mac}/series
 GET /api/energy/latest
 GET /api/energy/series
-GET /api/admin/schema
-GET /api/admin/cisco-spaces-firehose
 GET /api/admin/collector-status
+GET /api/admin/cisco-spaces-firehose
+GET /api/admin/schema
 ```
+
+Except for `/api/health`, API endpoints require a bearer token or
+`X-API-Token` when token enforcement is enabled. The admin page shows collector,
+Cisco Spaces Firehose, and schema status only.
 
 ## Build And Test
 
@@ -295,27 +223,28 @@ make test
 make build
 ```
 
-The Docker image builds every command listed in `tools/build.sh`.
+CI runs both commands and lints `docs/openapi.yaml`. The Container workflow
+publishes `main`, `sha-<short-sha>`, and release-tag images to
+`ghcr.io/hshimomura/home-metrics`.
 
 ## Deployment
 
-CI builds and publishes the container image. Deploy with the image digest
-produced by CI/CD, then run:
+Production deployment is managed by `ioslab-docs/servicecore` and pins the
+published image by digest. The required sequence is:
+
+1. Merge and confirm the home-metrics CI and Container workflows.
+2. Resolve the published GHCR digest.
+3. Update the servicecore home-metrics digest.
+4. Confirm servicecore Docker check and nms4 deploy.
+5. Verify the running digest, migrations, collector status, and telemetry.
+
+Example health checks:
 
 ```sh
-docker compose up -d hm-db-migrate
-docker compose up -d hm-api-server hm-db-maint
-docker compose --profile cisco-iot up -d hm-cisco-iot-orchestrator-collector
+curl -H "Authorization: Bearer $API_TOKEN" \
+  https://metrics.ioslab.jp/api/health/details
+curl -H "Authorization: Bearer $API_TOKEN" \
+  https://metrics.ioslab.jp/api/admin/collector-status
 ```
 
-After deployment, verify:
-
-```sh
-curl -H "Authorization: Bearer $API_TOKEN" https://metrics.ioslab.jp/api/health/details
-curl -H "Authorization: Bearer $API_TOKEN" https://metrics.ioslab.jp/api/admin/collector-status
-```
-
-## Systemd
-
-Systemd unit files are provided under `deploy/` for non-Compose deployments.
-There is no `hm-alert-worker` unit because alarm processing has been removed.
+See [docs/release.md](docs/release.md) for migration and release rules.

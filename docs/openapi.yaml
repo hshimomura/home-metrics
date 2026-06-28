@@ -1,23 +1,30 @@
 openapi: 3.1.0
 info:
   title: Home Metrics API
-  version: 1.0.0
-  description: REST API served by hm-api-server for sensor, energy, and collector status data.
+  version: 1.1.0
+  description: Read-only REST API for sensor, energy, collector, and schema status data.
+  license:
+    name: Apache-2.0
+    identifier: Apache-2.0
 servers:
-  - url: http://localhost:8080
+  - url: https://metrics.ioslab.jp
 security:
   - bearerAuth: []
   - apiToken: []
 paths:
   /api/health:
     get:
+      operationId: getHealth
       summary: Health check
       security: []
       responses:
         "200":
           description: Database is reachable
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
   /api/health/details:
     get:
+      operationId: getHealthDetails
       summary: Collector health summary
       responses:
         "200":
@@ -26,8 +33,11 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthDetails"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
   /api/devices:
     get:
+      operationId: listDevices
       summary: List sensor devices
       responses:
         "200":
@@ -38,8 +48,11 @@ paths:
                 type: array
                 items:
                   $ref: "#/components/schemas/Device"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
   /api/devices/{mac}/latest:
     get:
+      operationId: getDeviceLatest
       summary: Latest sensor values
       parameters:
         - $ref: "#/components/parameters/Mac"
@@ -50,8 +63,13 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/LatestSensor"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
   /api/devices/{mac}/series:
     get:
+      operationId: getDeviceSeries
       summary: Sensor series
       parameters:
         - $ref: "#/components/parameters/Mac"
@@ -71,8 +89,13 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/SensorSeries"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
   /api/energy/latest:
     get:
+      operationId: listEnergyLatest
       summary: Latest energy values
       parameters:
         - name: source
@@ -92,8 +115,11 @@ paths:
                 type: array
                 items:
                   $ref: "#/components/schemas/EnergyLatest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
   /api/energy/series:
     get:
+      operationId: getEnergySeries
       summary: Energy series
       parameters:
         - name: source
@@ -122,8 +148,15 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/EnergySeries"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
   /api/admin/collector-status:
     get:
+      operationId: listCollectorStatus
       summary: Collector status rows
       responses:
         "200":
@@ -134,8 +167,11 @@ paths:
                 type: array
                 items:
                   $ref: "#/components/schemas/CollectorStatus"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
   /api/admin/cisco-spaces-firehose:
     get:
+      operationId: getCiscoSpacesFirehoseStatus
       summary: Cisco Spaces firehose collector status
       responses:
         "200":
@@ -144,12 +180,21 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/CiscoSpacesFirehoseStatus"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
   /api/admin/schema:
     get:
+      operationId: getSchemaStatus
       summary: DB migration status
       responses:
         "200":
           description: Applied migrations
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SchemaStatus"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
 components:
   securitySchemes:
     bearerAuth:
@@ -166,7 +211,38 @@ components:
       required: true
       schema:
         type: string
+  responses:
+    BadRequest:
+      description: Invalid or missing request parameter
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    NotFound:
+      description: Requested device, reading, or metric was not found
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    Unauthorized:
+      description: API token is missing or invalid
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    ServiceUnavailable:
+      description: Database is unavailable
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
   schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
     Range:
       type: string
       enum: [1d, 1w, 1m, 3m, 1y]
@@ -317,6 +393,31 @@ components:
           type: integer
         stale_collectors:
           type: integer
+    SchemaMigration:
+      type: object
+      required: [version, name, checksum, applied_at]
+      properties:
+        version:
+          type: integer
+          format: int64
+        name:
+          type: string
+        checksum:
+          type: string
+        applied_at:
+          type: string
+          format: date-time
+    SchemaStatus:
+      type: object
+      required: [current_version, migrations]
+      properties:
+        current_version:
+          type: integer
+          format: int64
+        migrations:
+          type: array
+          items:
+            $ref: "#/components/schemas/SchemaMigration"
     CollectorStatus:
       type: object
       required: [collector_name, target_type, target_key, consecutive_failures, updated_at]
