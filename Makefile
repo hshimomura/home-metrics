@@ -8,6 +8,7 @@ BINS := \
 	hm-db-check \
 	hm-db-migrate \
 	hm-api-server \
+	hm-sensor-alert-worker \
 	hm-db-maint \
 	hm-cisco-spaces-collector \
 	hm-cisco-iot-orchestrator-collector \

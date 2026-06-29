@@ -46,13 +46,6 @@ func main() {
 	if err != nil {
 		log.Fatalf("load migrations: %v", err)
 	}
-	baselined, err := baselineSchemaSnapshot(ctx, db, migrations)
-	if err != nil {
-		log.Fatalf("baseline schema snapshot: %v", err)
-	}
-	if baselined {
-		log.Printf("schema snapshot detected; recorded %d migration baselines", len(migrations))
-	}
 	for _, migration := range migrations {
 		applied, err := appliedMigration(ctx, db, migration)
 		if err != nil {
@@ -144,107 +137,6 @@ func appliedMigration(ctx context.Context, db *pgx.Conn, migration migration) (b
 		return false, fmt.Errorf("checksum mismatch for migration %d", migration.Version)
 	}
 	return true, nil
-}
-
-func baselineSchemaSnapshot(ctx context.Context, db *pgx.Conn, migrations []migration) (bool, error) {
-	var count int
-	if err := db.QueryRow(ctx, `SELECT count(*) FROM schema_migrations`).Scan(&count); err != nil {
-		return false, err
-	}
-	if count > 0 {
-		return false, nil
-	}
-	current, err := latestSchemaSnapshotPresent(ctx, db)
-	if err != nil {
-		return false, err
-	}
-	if !current {
-		return false, nil
-	}
-	tx, err := db.Begin(ctx)
-	if err != nil {
-		return false, err
-	}
-	defer tx.Rollback(ctx)
-	for _, migration := range migrations {
-		if _, err := tx.Exec(ctx, `
-			INSERT INTO schema_migrations (version, name, checksum)
-			VALUES ($1, $2, $3)
-		`, migration.Version, migration.Name, migration.Checksum); err != nil {
-			return false, err
-		}
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return false, err
-	}
-	return true, nil
-}
-
-func latestSchemaSnapshotPresent(ctx context.Context, db *pgx.Conn) (bool, error) {
-	checks := []struct {
-		table  string
-		column string
-		want   bool
-	}{
-		{"devices", "ingest_source", true},
-		{"devices", "sensor_type_code", true},
-		{"devices", "sensor_category", true},
-		{"sensor_minute", "soil_moisture_percent", true},
-		{"sensor_minute", "conductivity_us_cm", true},
-		{"sensor_1hour", "soil_moisture_percent", true},
-		{"sensor_12hour", "soil_moisture_percent", true},
-		{"sensor_1day", "soil_moisture_percent", true},
-		{"sensor_1hour", "temperature_c_count", true},
-		{"sensor_12hour", "temperature_c_count", true},
-		{"sensor_1day", "temperature_c_count", true},
-		{"collector_status", "first_failure_at", true},
-	}
-	for _, check := range checks {
-		hasColumn, err := columnExists(ctx, db, check.table, check.column)
-		if err != nil {
-			return false, err
-		}
-		if hasColumn != check.want {
-			return false, nil
-		}
-	}
-	for _, table := range []string{"sensor_types", "energy_metric_definitions", "rollup_accuracy_state"} {
-		hasTable, err := tableExists(ctx, db, table)
-		if err != nil {
-			return false, err
-		}
-		if !hasTable {
-			return false, nil
-		}
-	}
-	return true, nil
-}
-
-func columnExists(ctx context.Context, db *pgx.Conn, table, column string) (bool, error) {
-	var exists bool
-	err := db.QueryRow(ctx, `
-		SELECT EXISTS (
-			SELECT 1
-			FROM information_schema.columns
-			WHERE table_schema = 'public'
-			  AND table_name = $1
-			  AND column_name = $2
-		)
-	`, table, column).Scan(&exists)
-	return exists, err
-}
-
-func tableExists(ctx context.Context, db *pgx.Conn, table string) (bool, error) {
-	var exists bool
-	err := db.QueryRow(ctx, `
-		SELECT EXISTS (
-			SELECT 1
-			FROM information_schema.tables
-			WHERE table_schema = 'public'
-			  AND table_name = $1
-		)
-	`, table).Scan(&exists)
-	return exists, err
 }
 
 func applyMigration(ctx context.Context, db *pgx.Conn, migration migration) error {

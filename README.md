@@ -1,17 +1,18 @@
 # home-metrics
 
 Home Metrics collects environmental, plant, energy, and UPS measurements into
-PostgreSQL/TimescaleDB. It provides a read-only REST API, a metrics page, and an
-admin page for collector and schema status.
+PostgreSQL/TimescaleDB. It provides a REST API, a metrics page, an admin page
+for collector and schema status, and sensor threshold alert evaluation.
 
 The service stores normalized readings rather than raw Cisco MQTT or Firehose
-payloads. Alert rules, APNs, webhooks, notification history, and device
-maintenance controls are outside the current scope.
+payloads. APNs, webhooks, delivery history, user/device notification
+registration, and device maintenance controls are outside the current scope.
 
 ## Components
 
 ```text
 cmd/hm-api-server/                     REST API and web pages
+cmd/hm-sensor-alert-worker/            sensor threshold state evaluation
 cmd/hm-db-migrate/                     schema migration CLI
 cmd/hm-db-maint/                       rollups and retention
 cmd/hm-db-check/                       database consistency checks
@@ -26,7 +27,7 @@ cmd/hm-energy-influx-import/           historical energy import
 internal/sensor/                       canonical sensor metric model
 internal/sensorstore/                  ownership and sparse DB writes
 db/schema.sql                          fresh-install schema
-db/migrations/                         existing-database migrations
+db/migrations/                         current baseline and future migrations
 web/                                   metrics and admin pages
 ```
 
@@ -34,6 +35,7 @@ web/                                   metrics and admin pages
 
 - [Architecture and data model](docs/architecture.md)
 - [REST API and client contract](docs/api.md)
+- [Sensor threshold alerts](docs/sensor-alerts.md)
 - [OpenAPI contract](docs/openapi.yaml)
 - [Release and deployment](docs/release.md)
 - [Xiaomi Flower Care integration](docs/xiaomi-flower-care-cisco-sensor-connect.md)
@@ -64,6 +66,7 @@ API_ALLOWED_ORIGINS=https://example.invalid
 COLLECTOR_STATUS_STALE_AFTER=5m
 GATT_CONTROL_STATUS_STALE_AFTER=26h
 CISCO_SPACES_COLLECTOR_ENABLED=false
+SENSOR_ALERT_WORKER_INTERVAL=1m
 ```
 
 Keep `CISCO_SPACES_COLLECTOR_ENABLED=false` while that optional profile is
@@ -124,6 +127,10 @@ GET /api/health/details
 GET /api/devices
 GET /api/devices/{mac}/latest
 GET /api/devices/{mac}/series
+GET|POST /api/sensor-alert-rules
+PUT|DELETE /api/sensor-alert-rules/{id}
+GET /api/sensor-alerts
+GET /api/sensor-alert-events
 GET /api/energy/latest
 GET /api/energy/series
 GET /api/admin/collector-status

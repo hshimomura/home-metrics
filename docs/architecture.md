@@ -1,15 +1,17 @@
 # Architecture
 
 Home Metrics collects environmental, plant, power, and UPS measurements into
-PostgreSQL/TimescaleDB. It exposes read-only APIs and two small server-rendered
-web pages. The current design deliberately excludes alert evaluation,
-notifications, webhooks, and device maintenance workflows.
+PostgreSQL/TimescaleDB. It exposes telemetry APIs, sensor threshold rule APIs,
+and two small server-rendered web pages. Alert evaluation is intentionally
+separate from notification delivery. APNs, webhooks, user notification-device
+registration, and device maintenance workflows are not implemented.
 
 ## Runtime Components
 
 | Component | Responsibility |
 | --- | --- |
 | `hm-api-server` | REST API, metrics page, and admin status page. |
+| `hm-sensor-alert-worker` | Evaluates sensor threshold rules and records state transitions. |
 | `hm-db-migrate` | Applies immutable numbered migrations. |
 | `hm-db-maint` | Refreshes sensor rollups and enforces minute retention. |
 | `hm-ble-collector` | Reads BLE advertisements from a local BlueZ adapter. |
@@ -146,6 +148,35 @@ source table by requested range:
 | `1m` | 30 days | 4 hours | `sensor_1hour` |
 | `3m` | 90 days | 12 hours | `sensor_12hour` |
 | `1y` | 365 days | 1 day | `sensor_1day` |
+
+## Sensor Threshold Alerts
+
+Sensor alerts operate on the newest non-null value for one device metric. The
+worker uses `internal/sensor.Metrics` as the only metric-to-column registry and
+does not copy values forward in `sensor_minute`.
+
+Each rule has separate trigger and clear thresholds. This hysteresis prevents
+rapid firing/resolution near a boundary. A rule can also require multiple
+fresh observations spanning `for_duration`; repeated evaluation of the same
+measurement timestamp does not advance that duration. `max_data_age` is set
+per rule so frequent temperature telemetry and daily battery telemetry can use
+different freshness limits.
+
+The state machine is:
+
+```text
+normal -> pending -> firing -> normal
+```
+
+Only transitions into `firing` and back to `normal` create
+`sensor_alert_events`. Missing or stale data never resolves a firing alert;
+the state remains firing and `evaluation_status` reports `no_data` or `stale`.
+Disabling a rule or device resolves an active alert with an explicit reason.
+
+The worker holds a PostgreSQL advisory lock so only one evaluator is active.
+State updates and event inserts occur in one transaction. APNs and webhook
+delivery are deliberately absent; clients poll current state or transition
+events. See `docs/sensor-alerts.md` for rule examples and client behavior.
 
 ## Collector Status
 

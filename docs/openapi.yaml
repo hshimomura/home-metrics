@@ -1,8 +1,8 @@
 openapi: 3.1.0
 info:
   title: Home Metrics API
-  version: 1.1.0
-  description: Read-only REST API for sensor, energy, collector, and schema status data.
+  version: 1.2.0
+  description: Sensor and energy telemetry API with sensor threshold alert evaluation.
   license:
     name: Apache-2.0
     identifier: Apache-2.0
@@ -89,6 +89,139 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/SensorSeries"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+  /api/sensor-alert-rules:
+    get:
+      operationId: listSensorAlertRules
+      summary: List sensor threshold rules
+      responses:
+        "200":
+          description: Sensor threshold rules
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/SensorAlertRule"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+    post:
+      operationId: createSensorAlertRule
+      summary: Create a sensor threshold rule
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SensorAlertRuleInput"
+      responses:
+        "201":
+          description: Created sensor threshold rule
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SensorAlertRule"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+  /api/sensor-alert-rules/{id}:
+    put:
+      operationId: updateSensorAlertRule
+      summary: Replace a sensor threshold rule
+      parameters:
+        - $ref: "#/components/parameters/AlertRuleId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SensorAlertRuleInput"
+      responses:
+        "200":
+          description: Updated sensor threshold rule
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SensorAlertRule"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+    delete:
+      operationId: deleteSensorAlertRule
+      summary: Delete a sensor threshold rule
+      parameters:
+        - $ref: "#/components/parameters/AlertRuleId"
+      responses:
+        "204":
+          description: Rule deleted
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+  /api/sensor-alerts:
+    get:
+      operationId: listSensorAlerts
+      summary: List current sensor alert states
+      parameters:
+        - name: status
+          in: query
+          schema:
+            $ref: "#/components/schemas/SensorAlertStatus"
+      responses:
+        "200":
+          description: Current alert states for evaluated rules
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/SensorAlert"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+  /api/sensor-alert-events:
+    get:
+      operationId: listSensorAlertEvents
+      summary: List sensor alert transition events
+      parameters:
+        - name: since
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: event_type
+          in: query
+          schema:
+            type: string
+            enum: [firing, resolved]
+        - name: mac
+          in: query
+          schema:
+            type: string
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 500
+            default: 100
+      responses:
+        "200":
+          description: Alert transition events, newest first
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/SensorAlertEvent"
         "400":
           $ref: "#/components/responses/BadRequest"
         "401":
@@ -211,6 +344,14 @@ components:
       required: true
       schema:
         type: string
+    AlertRuleId:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: integer
+        format: int64
+        minimum: 1
   responses:
     BadRequest:
       description: Invalid or missing request parameter
@@ -341,6 +482,181 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/SeriesPoint"
+    SensorAlertDirection:
+      type: string
+      enum: [above, below]
+    SensorAlertSeverity:
+      type: string
+      enum: [info, warning, critical]
+    SensorAlertStatus:
+      type: string
+      enum: [normal, pending, firing]
+    SensorAlertEvaluationStatus:
+      type: string
+      enum: [ok, stale, no_data, disabled]
+    SensorAlertRuleInput:
+      type: object
+      additionalProperties: false
+      required:
+        - name
+        - mac
+        - metric
+        - direction
+        - trigger_threshold
+        - clear_threshold
+        - for_duration_seconds
+        - max_data_age_seconds
+        - severity
+        - enabled
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 200
+        mac:
+          type: string
+        metric:
+          $ref: "#/components/schemas/SensorMetric"
+        direction:
+          $ref: "#/components/schemas/SensorAlertDirection"
+        trigger_threshold:
+          type: number
+        clear_threshold:
+          type: number
+          description: Must be below the trigger for above rules and above it for below rules.
+        for_duration_seconds:
+          type: integer
+          minimum: 0
+          maximum: 2592000
+        max_data_age_seconds:
+          type: integer
+          minimum: 1
+          maximum: 31536000
+        severity:
+          $ref: "#/components/schemas/SensorAlertSeverity"
+        enabled:
+          type: boolean
+    SensorAlertRule:
+      allOf:
+        - $ref: "#/components/schemas/SensorAlertRuleInput"
+        - type: object
+          required: [id, device_label, created_at, updated_at]
+          properties:
+            id:
+              type: integer
+              format: int64
+            device_label:
+              type: string
+            created_at:
+              type: string
+              format: date-time
+            updated_at:
+              type: string
+              format: date-time
+    SensorAlert:
+      type: object
+      required:
+        - rule_id
+        - rule_name
+        - mac
+        - device_label
+        - metric
+        - severity
+        - direction
+        - trigger_threshold
+        - clear_threshold
+        - status
+        - evaluation_status
+      properties:
+        rule_id:
+          type: integer
+          format: int64
+        rule_name:
+          type: string
+        mac:
+          type: string
+        device_label:
+          type: string
+        metric:
+          $ref: "#/components/schemas/SensorMetric"
+        severity:
+          $ref: "#/components/schemas/SensorAlertSeverity"
+        direction:
+          $ref: "#/components/schemas/SensorAlertDirection"
+        trigger_threshold:
+          type: number
+        clear_threshold:
+          type: number
+        status:
+          $ref: "#/components/schemas/SensorAlertStatus"
+        evaluation_status:
+          $ref: "#/components/schemas/SensorAlertEvaluationStatus"
+        pending_since:
+          type: string
+          format: date-time
+        fired_at:
+          type: string
+          format: date-time
+        resolved_at:
+          type: string
+          format: date-time
+        last_value:
+          type: number
+        last_value_at:
+          type: string
+          format: date-time
+        last_evaluated_at:
+          type: string
+          format: date-time
+    SensorAlertEvent:
+      type: object
+      required:
+        - id
+        - event_type
+        - reason
+        - rule_name
+        - mac
+        - metric
+        - severity
+        - direction
+        - trigger_threshold
+        - clear_threshold
+        - occurred_at
+      properties:
+        id:
+          type: integer
+          format: int64
+        alert_rule_id:
+          type: integer
+          format: int64
+        event_type:
+          type: string
+          enum: [firing, resolved]
+        reason:
+          type: string
+          enum: [threshold_crossed, threshold_cleared, rule_disabled, device_disabled]
+        rule_name:
+          type: string
+        mac:
+          type: string
+        metric:
+          $ref: "#/components/schemas/SensorMetric"
+        severity:
+          $ref: "#/components/schemas/SensorAlertSeverity"
+        direction:
+          $ref: "#/components/schemas/SensorAlertDirection"
+        trigger_threshold:
+          type: number
+        clear_threshold:
+          type: number
+        value:
+          type: number
+        value_at:
+          type: string
+          format: date-time
+        occurred_at:
+          type: string
+          format: date-time
     EnergyLatest:
       type: object
       required: [ts, source, device_key, metric, value]

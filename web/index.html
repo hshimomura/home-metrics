@@ -32,6 +32,10 @@
     .chart-tooltip { position: absolute; pointer-events: none; display: none; padding: 6px 8px; border: 1px solid #c7ced6; border-radius: 6px; background: rgba(255, 255, 255, 0.96); color: #202124; font-size: 12px; box-shadow: 0 2px 8px rgba(32, 33, 36, 0.18); }
     .muted { color: #5f6b76; font-size: 13px; }
     .error { color: #a61b1b; }
+    .alert-row-critical { border-left: 4px solid #b42318; }
+    .alert-row-warning { border-left: 4px solid #d97706; }
+    .alert-row-info { border-left: 4px solid #2563eb; }
+    .status-badge { display: inline-block; padding: 2px 7px; border-radius: 999px; background: #fee2e2; color: #991b1b; font-size: 12px; font-weight: 650; }
     @media (prefers-color-scheme: dark) {
       body { background: #151719; color: #e8eaed; }
       table { background: #1f2327; border-color: #363c42; }
@@ -45,6 +49,7 @@
       .chart-wrap { background: #1f2327; border-color: #363c42; }
       .chart-tooltip { background: rgba(31, 35, 39, 0.96); color: #e8eaed; border-color: #4b5560; }
       .muted { color: #a8b0b8; }
+      .status-badge { background: #4c1d1d; color: #fecaca; }
     }
   </style>
 </head>
@@ -61,6 +66,14 @@
         <button id="refresh">Refresh</button>
       </div>
     </header>
+
+    <section>
+      <h2>Active Alerts</h2>
+      <table>
+        <thead><tr><th>Severity</th><th>Sensor</th><th>Metric</th><th>Value</th><th>Rule</th><th>Fired</th><th>Data status</th></tr></thead>
+        <tbody id="active-alerts"><tr><td colspan="7" class="muted">Loading</td></tr></tbody>
+      </table>
+    </section>
 
     <section>
       <h2>Devices</h2>
@@ -237,6 +250,13 @@
       statusLine.textContent = 'Loading';
       statusLine.className = 'muted';
       try {
+        const alerts = await getJSON('/api/sensor-alerts?status=firing');
+        document.querySelector('#active-alerts').innerHTML = alerts.length ? alerts.map(alert => {
+          const info = metricInfo(alert.metric);
+          const threshold = `${alert.direction === 'below' ? '≤' : '≥'} ${formatMetricValue(alert.trigger_threshold, alert.metric)}`;
+          return `<tr class="alert-row-${escapeHTML(alert.severity)}"><td><span class="status-badge">${escapeHTML(alert.severity)}</span></td><td>${escapeHTML(alert.device_label || alert.mac)}</td><td>${escapeHTML(info.label)}</td><td>${escapeHTML(formatMetricValue(alert.last_value, alert.metric))}</td><td>${escapeHTML(alert.rule_name)} (${escapeHTML(threshold)})</td><td>${escapeHTML(cell(alert.fired_at))}</td><td>${escapeHTML(alert.evaluation_status)}</td></tr>`;
+        }).join('') : '<tr><td colspan="7" class="muted">No active alerts</td></tr>';
+
         const devices = (await getJSON('/api/devices')).filter(visibleDevice);
         devicesCache = devices;
         const latest = await Promise.all(devices.map(async d => {

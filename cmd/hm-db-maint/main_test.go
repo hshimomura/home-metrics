@@ -37,6 +37,20 @@ func TestRetainSensorMinuteDeletesOldRows(t *testing.T) {
 	}
 }
 
+func TestRetainSensorAlertEventsDeletesOldRows(t *testing.T) {
+	db := &fakeMaintExecer{}
+	retain := 90 * 24 * time.Hour
+	if err := retainSensorAlertEvents(context.Background(), db, retain); err != nil {
+		t.Fatalf("retainSensorAlertEvents returned error: %v", err)
+	}
+	if !strings.Contains(db.sql, "DELETE FROM sensor_alert_events") {
+		t.Fatalf("unexpected SQL: %s", db.sql)
+	}
+	if !strings.Contains(db.sql, "occurred_at < now() - $1::interval") {
+		t.Fatalf("SQL must delete by event retention: %s", db.sql)
+	}
+}
+
 func TestBuildMinuteRollupSQLIncludesMetricCountsAndCutoff(t *testing.T) {
 	sql := buildRollupSQL("sensor_1hour", "sensor_minute", false)
 	for _, fragment := range []string{

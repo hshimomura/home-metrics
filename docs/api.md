@@ -1,6 +1,7 @@
 # Home Metrics API
 
-`hm-api-server` exposes read-only sensor, energy, collector, and schema data.
+`hm-api-server` exposes sensor and energy telemetry, sensor threshold rule
+management, current alert state, collector status, and schema data.
 `docs/openapi.yaml` is the machine-readable contract; this document explains
 runtime semantics that are easier to read in prose.
 
@@ -148,6 +149,62 @@ For compatibility, clients should treat optional metadata as optional, ignore
 unknown future metric keys, use `value_timestamps` when metric age matters, and
 avoid all removed classification fields.
 
+## Sensor Threshold Alerts
+
+Alert rules are authenticated deployment-wide resources. They are not attached
+to application users or iOS notification devices. The server evaluates each
+rule against the latest non-null value of its selected metric.
+
+### `GET /api/sensor-alert-rules`
+
+Returns all rules ordered by ID. Durations are integer seconds. Joined
+`device_label` is included for display.
+
+### `POST /api/sensor-alert-rules`
+
+Creates a rule. The JSON body requires:
+
+- `name`, `mac`, `metric`, and `enabled`;
+- `direction`: `above` or `below`;
+- `trigger_threshold` and `clear_threshold`;
+- `for_duration_seconds` from 0 through 2592000;
+- `max_data_age_seconds` from 1 through 31536000;
+- `severity`: `info`, `warning`, or `critical`.
+
+For `above`, clear must be lower than trigger. For `below`, clear must be
+higher. The MAC must already exist in `devices`, and metric must be in the
+canonical sensor metric registry. Success returns `201` and the created rule.
+
+### `PUT /api/sensor-alert-rules/{id}`
+
+Fully replaces an existing rule using the same required body as `POST`.
+
+### `DELETE /api/sensor-alert-rules/{id}`
+
+Deletes the rule and current state, returning `204`. Historical transition
+events remain as snapshots and omit `alert_rule_id`.
+
+### `GET /api/sensor-alerts`
+
+Returns current state for rules evaluated by the worker. Optional `status` is
+`normal`, `pending`, or `firing`. Important fields are:
+
+- `status`: threshold state;
+- `evaluation_status`: `ok`, `stale`, `no_data`, or `disabled`;
+- `last_value` and `last_value_at`;
+- `pending_since`, `fired_at`, and `resolved_at` when applicable.
+
+Stale or missing data does not resolve a firing alert.
+
+### `GET /api/sensor-alert-events`
+
+Returns firing/resolved transitions newest first. Filters are `since` (RFC3339),
+`event_type`, `mac`, and `limit` (1-500, default 100). These are evaluation
+events, not APNs or webhook delivery records.
+
+See [sensor-alerts.md](sensor-alerts.md) for state-machine semantics, complete
+request/response examples, and the mobile-client contract.
+
 ## Energy
 
 ### `GET /api/energy/latest`
@@ -197,11 +254,11 @@ Returns the current migration version and all applied migrations:
 
 ```json
 {
-  "current_version": 17,
+  "current_version": 1,
   "migrations": [
     {
-      "version": 17,
-      "name": "add_weighted_rollup_counts",
+      "version": 1,
+      "name": "initial_schema",
       "checksum": "...",
       "applied_at": "2026-06-28T03:16:43Z"
     }

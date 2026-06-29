@@ -1,9 +1,33 @@
 package main
 
 import (
+	"path/filepath"
 	"reflect"
+	"runtime"
 	"testing"
 )
+
+func TestInitialSchemaIsTheOnlyMigrationAndParses(t *testing.T) {
+	_, file, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("resolve test path")
+	}
+	dir := filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", "db", "migrations"))
+	migrations, err := loadMigrations(dir)
+	if err != nil {
+		t.Fatalf("load migrations: %v", err)
+	}
+	if len(migrations) != 1 || migrations[0].Version != 1 || migrations[0].Name != "initial_schema" {
+		t.Fatalf("migrations = %+v, want only 0001_initial_schema", migrations)
+	}
+	statements, err := splitSQLStatements(migrations[0].SQL)
+	if err != nil {
+		t.Fatalf("parse initial schema: %v", err)
+	}
+	if len(statements) < 20 {
+		t.Fatalf("initial schema statements = %d, want complete schema", len(statements))
+	}
+}
 
 func TestSplitSQLStatementsKeepsQuotedSemicolons(t *testing.T) {
 	input := `

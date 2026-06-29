@@ -12,6 +12,7 @@ bins=(
   hm-db-check
   hm-db-migrate
   hm-api-server
+  hm-sensor-alert-worker
   hm-db-maint
   hm-cisco-spaces-collector
   hm-cisco-iot-orchestrator-collector
@@ -24,6 +25,7 @@ bins=(
 mkdir -p "$build_dir" "$go_cache" "$go_mod_cache"
 
 retired_bins=(
+  hm-alert-worker
   hm-cisco-spaces-export-raw
 )
 

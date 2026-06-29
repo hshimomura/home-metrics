@@ -17,7 +17,10 @@ func TestMetricContractCoversSchemaAPIWebAndRollups(t *testing.T) {
 	schema := readContractFile(t, filepath.Join(root, "db", "schema.sql"))
 	openAPI := readContractFile(t, filepath.Join(root, "docs", "openapi.yaml"))
 	web := readContractFile(t, filepath.Join(root, "web", "index.html"))
-	migration := readContractFile(t, filepath.Join(root, "db", "migrations", "0017_add_weighted_rollup_counts.sql"))
+	migration := readContractFile(t, filepath.Join(root, "db", "migrations", "0001_initial_schema.sql"))
+	if migration != schema {
+		t.Fatal("db/schema.sql and 0001_initial_schema.sql must remain identical")
+	}
 
 	for _, metric := range Metrics {
 		if count := strings.Count(schema, metric.Column+" double precision"); count != 4 {
@@ -33,7 +36,7 @@ func TestMetricContractCoversSchemaAPIWebAndRollups(t *testing.T) {
 			t.Errorf("web metric registry is missing %s", metric.Key)
 		}
 		if strings.Count(migration, metric.Column+"_count bigint") != 3 {
-			t.Errorf("weighted rollup migration is missing %s_count", metric.Column)
+			t.Errorf("initial schema migration is missing %s_count", metric.Column)
 		}
 	}
 }

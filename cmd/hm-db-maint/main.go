@@ -27,6 +27,7 @@ func main() {
 		dsn = defaultDBDSN
 	}
 	retainMinute := envDuration("DB_MAINT_RETAIN_MINUTE", 14*24*time.Hour)
+	retainAlertEvents := envDuration("DB_MAINT_RETAIN_ALERT_EVENTS", 90*24*time.Hour)
 	refreshLookback := envDuration("DB_MAINT_REFRESH_LOOKBACK", 48*time.Hour)
 
 	db, err := pgx.Connect(ctx, dsn)
@@ -40,6 +41,9 @@ func main() {
 	}
 	if err := retainSensorMinute(ctx, db, retainMinute); err != nil {
 		log.Fatalf("retain sensor_minute: %v", err)
+	}
+	if err := retainSensorAlertEvents(ctx, db, retainAlertEvents); err != nil {
+		log.Fatalf("retain sensor alert events: %v", err)
 	}
 }
 
@@ -151,6 +155,18 @@ func retainSensorMinute(ctx context.Context, db execer, retain time.Duration) er
 		return err
 	}
 	log.Printf("retained sensor_minute retain=%s deleted=%d", retain, tag.RowsAffected())
+	return nil
+}
+
+func retainSensorAlertEvents(ctx context.Context, db execer, retain time.Duration) error {
+	tag, err := db.Exec(ctx, `
+		DELETE FROM sensor_alert_events
+		WHERE occurred_at < now() - $1::interval
+	`, intervalSeconds(retain))
+	if err != nil {
+		return err
+	}
+	log.Printf("retained sensor_alert_events retain=%s deleted=%d", retain, tag.RowsAffected())
 	return nil
 }
 

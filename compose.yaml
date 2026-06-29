@@ -74,8 +74,22 @@ services:
       <<: *app_env
       DB_MAINT_REFRESH_LOOKBACK: ${DB_MAINT_REFRESH_LOOKBACK:-336h}
       DB_MAINT_RETAIN_MINUTE: ${DB_MAINT_RETAIN_MINUTE:-336h}
+      DB_MAINT_RETAIN_ALERT_EVENTS: ${DB_MAINT_RETAIN_ALERT_EVENTS:-2160h}
       DB_MAINT_INTERVAL: ${DB_MAINT_INTERVAL:-1h}
     entrypoint: ["/bin/sh", "/usr/local/bin/run-db-maint-loop"]
+
+  hm-sensor-alert-worker:
+    image: *app_image
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+      hm-db-migrate:
+        condition: service_completed_successfully
+    environment:
+      <<: *app_env
+      SENSOR_ALERT_WORKER_INTERVAL: ${SENSOR_ALERT_WORKER_INTERVAL:-1m}
+    command: ["hm-sensor-alert-worker"]
 
   hm-cisco-spaces-collector:
     image: *app_image

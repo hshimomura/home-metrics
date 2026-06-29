@@ -38,23 +38,37 @@ schema, weighted-rollup migration, OpenAPI contract, and web UI.
 
 ## Database Migrations
 
-`db/schema.sql` is the latest fresh-install snapshot. `db/migrations/*.sql`
-upgrades existing databases. Follow these rules:
+`db/schema.sql` and `db/migrations/0001_initial_schema.sql` are the same current
+baseline. The migration history before this baseline is intentionally not
+supported. Follow these rules:
 
-1. Never edit a migration that may have been applied.
-2. Add a new numbered migration for every existing-volume schema change.
+1. Never edit `0001` after it is deployed.
+2. Add `0002` and later for every future existing-volume schema change.
 3. Update `db/schema.sql` to the same final state.
 4. Keep migration SQL compatible with `hm-db-migrate` checksum validation.
-5. Make API and collectors depend on successful migration completion.
+5. Make API, workers, and collectors depend on successful migration completion.
 
-For a new database initialized from `db/schema.sql`, `hm-db-migrate` records
-the migrations represented by that snapshot as its baseline. Existing volumes
-apply only unapplied migrations.
+`0001_initial_schema.sql` contains the normalized sensor and energy schema,
+metric-specific weighted rollup counts, collector status, and sensor threshold
+rules/state/events. It does not contain the retired APNs, webhook, user
+registration, notification delivery, health-alert, raw payload, or maintenance
+tables.
 
-Migration `0017_add_weighted_rollup_counts.sql` adds metric-specific rollup
-counts and `rollup_accuracy_state`. The first maintenance run initializes an
-immutable accuracy cutoff and rebuilds only complete retained buckets at or
-after it. Do not reset that cutoff during a normal release.
+The one production database that predates this baseline is adopted explicitly:
+
+1. confirm its live schema already matches the pre-alert current schema;
+2. clear only `schema_migrations` directly in PostgreSQL;
+3. deploy the new image and let `hm-db-migrate` apply idempotent `0001`;
+4. verify that version `1` is the only migration row and application data row
+   counts are preserved.
+
+This is a controlled one-time operation, not a general upgrade path. Databases
+from arbitrary older repository revisions must be rebuilt or migrated manually.
+Future upgrades begin with `0002`.
+
+The first maintenance run initializes an immutable rollup accuracy cutoff and
+rebuilds only complete retained buckets at or after it. Do not reset that cutoff
+during a normal release.
 
 ## Main-Branch Deployment
 
@@ -103,6 +117,7 @@ docker compose \
 
 docker inspect -f '{{.Name}} {{.Config.Image}} {{.State.Status}}' \
   home-metrics-hm-api-server-1 \
+  home-metrics-hm-sensor-alert-worker-1 \
   home-metrics-hm-db-maint-1 \
   home-metrics-hm-cisco-iot-orchestrator-collector-1
 ```
@@ -122,6 +137,9 @@ Use the configured token without printing it:
 ```sh
 curl -H "Authorization: Bearer $API_TOKEN" \
   https://metrics.ioslab.jp/api/health/details
+
+curl -H "Authorization: Bearer $API_TOKEN" \
+  'https://metrics.ioslab.jp/api/sensor-alerts?status=firing'
 ```
 
 The final verification should establish:
@@ -129,6 +147,7 @@ The final verification should establish:
 - every running application container uses the pinned digest;
 - migration completed successfully;
 - API health is `ok` and no expected collector is stale;
+- the sensor alert worker is running and alert rule/state/event APIs respond;
 - recent telemetry exists for enabled devices;
 - logs contain no `conn busy`, ownership conflict, panic, or fatal error;
 - Cisco Spaces remains stopped and excluded when intentionally disabled.
