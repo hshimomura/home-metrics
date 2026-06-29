@@ -4,6 +4,26 @@ GitHub is the canonical source repository. CI validates the Go code and API
 contract; the Container workflow publishes the runtime image. Production on
 `nms4` is managed by `ioslab-docs/servicecore`.
 
+## Compatibility Lines
+
+`v2.0.0` is a deliberate database compatibility boundary. It starts from the
+squashed `0001_initial_schema.sql`; migrations from the v1 development history
+are not part of the active tree and arbitrary v1 databases are not accepted as
+an automatic upgrade source.
+
+| Release line | Database contract | Status |
+| --- | --- | --- |
+| `v2.0.0+` | `0001_initial_schema.sql`, followed by immutable `0002+` migrations | Active |
+| `v1.0.0` through `v1.1.1` | Legacy migration history and matching v1 schema | Historical |
+
+Git tags and GitHub Releases from v1 remain available for audit and source
+reproducibility. Their release notes must warn that the artifacts are not valid
+for a v2 database.
+
+Application and database rollback are one operation. Never point a v1 image at
+the v2 database. To restore v1, restore a matching v1 logical backup and its
+matching image together. If no matching backup exists, remain on v2.
+
 ## Published Image
 
 ```text
@@ -34,7 +54,7 @@ npx --yes @redocly/cli@1.34.5 lint docs/openapi.yaml
 
 `make build` compiles every command listed in `tools/build.sh`. Sensor contract
 tests also verify that the canonical metric registry is represented in the
-schema, weighted-rollup migration, OpenAPI contract, and web UI.
+schema, initial baseline migration, OpenAPI contract, and web UI.
 
 ## Database Migrations
 
@@ -65,6 +85,11 @@ The one production database that predates this baseline is adopted explicitly:
 This is a controlled one-time operation, not a general upgrade path. Databases
 from arbitrary older repository revisions must be rebuilt or migrated manually.
 Future upgrades begin with `0002`.
+
+After adopting the v2 baseline, create a PostgreSQL custom-format logical
+backup and prove it with `pg_restore --list` plus a temporary full restore. Keep
+the archive outside the repository with mode `0600`, record its SHA-256, and do
+not store database data or credentials in GitHub Releases.
 
 The first maintenance run initializes an immutable rollup accuracy cutoff and
 rebuilds only complete retained buckets at or after it. Do not reset that cutoff
@@ -99,6 +124,14 @@ The servicecore helper resolves and updates the current `main` digest:
    changes.
 5. Resolve the release-tag digest and update servicecore if production should
    pin the release image rather than the main image.
+
+For the `v2.0.0` boundary release, also verify:
+
+- GitHub Release notes identify `v1.1.1` and earlier as historical-only;
+- the release notes state that v1 and v2 databases are not cross-compatible;
+- a tested v2 baseline database backup exists;
+- servicecore pins the `v2.0.0` tag image by digest after its Container workflow
+  succeeds.
 
 Do not put an unverified digest in release notes. The tag-triggered build can
 produce a different manifest digest from an earlier main build.
@@ -154,8 +187,9 @@ The final verification should establish:
 
 ## Rollback
 
-Application rollback means restoring the previous known-good servicecore image
-digest and redeploying. A database migration is not automatically reversible.
-Before releasing a destructive migration, document its data impact and a
-specific restore procedure. Never point an older binary at a schema it cannot
-understand merely because the image rollback succeeded.
+Within the v2 line, application rollback means restoring a previous known-good
+v2 servicecore image digest when that image supports the current schema. A
+database migration is not automatically reversible. Before releasing a
+destructive migration, document its data impact and a specific restore
+procedure. Across the v1/v2 boundary, restore the matching database and image
+together; image-only rollback is forbidden.

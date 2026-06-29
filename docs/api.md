@@ -5,6 +5,10 @@ management, current alert state, collector status, and schema data.
 `docs/openapi.yaml` is the machine-readable contract; this document explains
 runtime semantics that are easier to read in prose.
 
+The API document version is `2.0.0` because the application now belongs to the
+v2 database compatibility line. Existing telemetry response shapes remain
+compatible, but a v1 server binary must never be run against the v2 database.
+
 ## Authentication
 
 `GET /api/health` is public. Other `/api/*` endpoints require authentication

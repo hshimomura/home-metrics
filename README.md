@@ -43,6 +43,25 @@ web/                                   metrics and admin pages
 These are the only active design and operation documents. Completed plans and
 downstream RoomPlus/Grafana artifacts are intentionally not duplicated here.
 
+## Version Compatibility
+
+`v2.0.0` starts a new database compatibility line at
+`db/migrations/0001_initial_schema.sql`. Releases through `v1.1.1` are kept on
+GitHub for history and reproducibility, but they are not compatible with a v2
+database and cannot upgrade to it automatically.
+
+| Application | Database | Supported |
+| --- | --- | --- |
+| `v2.0.0` and later | v2 baseline plus `0002+` migrations | Yes |
+| `v1.1.1` and earlier | matching legacy v1 database | Historical only |
+| v1 application | v2 database | No |
+| v2 application | arbitrary legacy v1 database | No |
+
+Never roll back only the container image from v2 to v1. A v1 rollback requires
+restoring both a matching v1 database backup and its application image. Keep
+old tags and releases as immutable historical references; do not use them as a
+rollback target for the current production database.
+
 ## Configuration
 
 Start from:
@@ -77,7 +96,7 @@ stopped so historical status rows do not degrade health.
 Start the core services:
 
 ```sh
-docker compose up -d db hm-db-migrate hm-db-maint hm-api-server
+docker compose up -d db hm-db-migrate hm-db-maint hm-api-server hm-sensor-alert-worker
 ```
 
 Start the collectors required by the deployment:
