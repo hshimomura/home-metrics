@@ -29,6 +29,7 @@ func newRouter(api *apiServer) http.Handler {
 	mux.HandleFunc("GET /api/devices", api.handleDevices)
 	mux.HandleFunc("GET /api/devices/{mac}/latest", api.handleDeviceLatest)
 	mux.HandleFunc("GET /api/devices/{mac}/series", api.handleDeviceSeries)
+	mux.HandleFunc("GET /api/devices/{mac}/motion-events", api.handleMotionEvents)
 	mux.HandleFunc("GET /api/sensor-alert-rules", api.handleSensorAlertRules)
 	mux.HandleFunc("POST /api/sensor-alert-rules", api.handleCreateSensorAlertRule)
 	mux.HandleFunc("PUT /api/sensor-alert-rules/{id}", api.handleUpdateSensorAlertRule)

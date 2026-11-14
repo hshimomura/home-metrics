@@ -250,7 +250,7 @@ func main() {
 	}
 	dbMu := &sync.Mutex{}
 	reporter := &statusReporter{mu: dbMu, db: db, target: statusTarget}
-	log.Printf("Cisco Spaces collector started url=%s db=%s dry_run=%t", cfg.FirehoseURL, cfg.DBDSN, cfg.DryRun)
+	log.Printf("Cisco Spaces collector started url=%s dry_run=%t", cfg.FirehoseURL, cfg.DryRun)
 	streamWithReconnect(ctx, client, cfg, func(err error) {
 		reporter.MarkFailure(ctx, err)
 	}, func() {

@@ -78,11 +78,12 @@
     <section>
       <h2>Devices</h2>
       <table>
-        <thead><tr><th>MAC</th><th>Label</th><th>Sensor</th><th>Latest</th><th>Temperature</th><th>Humidity</th><th>Soil</th><th>Conductivity</th><th>Battery</th><th>Lux</th><th>CO2</th></tr></thead>
+        <thead><tr><th>MAC</th><th>Label</th><th>Sensor</th><th>Latest</th><th>Temperature</th><th>Humidity</th><th>Soil</th><th>Conductivity</th><th>Battery</th><th>Motion</th><th>Lux</th><th>CO2</th></tr></thead>
         <tbody id="devices"></tbody>
       </table>
     </section>
 
+    <section id="motion-detail" hidden><h2>Motion Events</h2><div id="motion-status" class="muted"></div><table><thead><tr><th>Observed</th><th>State</th><th>Type</th></tr></thead><tbody id="motion-events"></tbody></table></section>
     <section id="sensor-detail">
       <div class="detail-toolbar">
         <div>
@@ -219,7 +220,8 @@
     }
 
     function renderMetricControls() {
-      metricControls.innerHTML = metrics.map(metric => (
+      const shownMetrics = selectedDevice?.sensor_category === 'motion' ? metrics.filter(metric => metric.key === 'battery_percent') : metrics;
+      metricControls.innerHTML = shownMetrics.map(metric => (
         `<button class="metric-button" data-metric="${metric.key}" aria-pressed="${metric.key === selectedMetric}">${metric.label}</button>`
       )).join('');
     }
@@ -267,7 +269,7 @@
           const values = latest?.values || {};
           const valueTimestamps = latest?.value_timestamps || {};
           const sensorName = device.sensor_type?.display_name || device.sensor_type_code || device.sensor_category || device.ingest_source;
-          return `<tr><td><button class="link-button" data-mac="${escapeHTML(device.mac)}">${escapeHTML(device.mac)}</button></td><td>${escapeHTML(device.label)}</td><td>${escapeHTML(cell(sensorName))}</td><td>${escapeHTML(cell(latest?.ts))}</td><td>${metricCell(values, valueTimestamps, 'temperature_c')}</td><td>${metricCell(values, valueTimestamps, 'humidity_percent')}</td><td>${metricCell(values, valueTimestamps, 'soil_moisture_percent', 0)}</td><td>${metricCell(values, valueTimestamps, 'conductivity_us_cm', 0)}</td><td>${metricCell(values, valueTimestamps, 'battery_percent', 0)}</td><td>${metricCell(values, valueTimestamps, 'lux', 0)}</td><td>${metricCell(values, valueTimestamps, 'co2_ppm', 0)}</td></tr>`;
+          return `<tr><td><button class="link-button" data-mac="${escapeHTML(device.mac)}">${escapeHTML(device.mac)}</button></td><td>${escapeHTML(device.label)}</td><td>${escapeHTML(cell(sensorName))}</td><td>${escapeHTML(cell(latest?.ts))}</td><td>${metricCell(values, valueTimestamps, 'temperature_c')}</td><td>${metricCell(values, valueTimestamps, 'humidity_percent')}</td><td>${metricCell(values, valueTimestamps, 'soil_moisture_percent', 0)}</td><td>${metricCell(values, valueTimestamps, 'conductivity_us_cm', 0)}</td><td>${metricCell(values, valueTimestamps, 'battery_percent', 0)}</td><td>${latest?.motion ? `<span title="${escapeHTML(latest.motion.observed_at || '')}">${latest.motion.motion == null ? 'Unknown' : latest.motion.motion ? 'Detected' : 'Clear'}${latest.motion.fresh ? '' : ' (stale)'}</span>` : '—'}</td><td>${metricCell(values, valueTimestamps, 'lux', 0)}</td><td>${metricCell(values, valueTimestamps, 'co2_ppm', 0)}</td></tr>`;
         }).join('');
         if (!selectedDevice && latest.length) {
           await selectDevice(latest[0].device);
@@ -309,6 +311,18 @@
     }
 
     async function loadSensorSeries() {
+      const isMotion = selectedDevice?.sensor_category === 'motion';
+      if (isMotion && selectedMetric !== 'battery_percent') selectedMetric = 'battery_percent';
+      renderMetricControls();
+      document.querySelector('#motion-detail').hidden = !isMotion;
+      if (isMotion) {
+        try {
+          const data = await getJSON(`/api/devices/${encodeURIComponent(selectedDevice.mac)}/motion-events?limit=50`);
+          document.querySelector('#motion-status').textContent = 'Latest 50 state transitions within 24 hours; initial observations are marked.';
+          document.querySelector('#motion-events').innerHTML = data.events.map(e => `<tr><td>${escapeHTML(e.observed_at)}</td><td>${e.motion ? 'Detected' : 'Clear'}</td><td>${e.initial ? 'Initial state' : 'Transition'}</td></tr>`).join('') || '<tr><td colspan="3">No motion events</td></tr>';
+        } catch (err) { document.querySelector('#motion-status').textContent = err.message; }
+      }
+
       if (!selectedDevice) return;
       const info = metricInfo(selectedMetric);
       detailTitle.textContent = `${selectedDevice.label || selectedDevice.mac} / ${info.label}`;

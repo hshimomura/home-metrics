@@ -67,6 +67,46 @@ paths:
           $ref: "#/components/responses/NotFound"
         "401":
           $ref: "#/components/responses/Unauthorized"
+  /api/devices/{mac}/motion-events:
+    get:
+      operationId: getDeviceMotionEvents
+      summary: Motion state transitions, newest first
+      parameters:
+        - $ref: "#/components/parameters/Mac"
+        - name: since
+          in: query
+          schema:
+            type: string
+            format: date-time
+          description: Inclusive lower bound; defaults to 24 hours ago.
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 5000
+            default: 1000
+      responses:
+        "200":
+          description: Observed motion transitions; the first state is marked initial.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [mac, events]
+                properties:
+                  mac:
+                    type: string
+                  events:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/MotionEvent"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
   /api/devices/{mac}/series:
     get:
       operationId: getDeviceSeries
@@ -438,10 +478,52 @@ components:
           type: string
         model:
           type: string
+    MotionState:
+      type: object
+      required: [motion, observed_at, last_seen_at, fresh]
+      properties:
+        motion:
+          type: [boolean, "null"]
+        observed_at:
+          type: [string, "null"]
+          format: date-time
+        last_seen_at:
+          type: string
+          format: date-time
+        fresh:
+          type: boolean
+          description: Last observation is within MOTION_SENSOR_STALE_AFTER (default 45 minutes).
+        ap_mac:
+          type: string
+    MotionEvent:
+      type: object
+      required: [id, observed_at, received_at, motion, initial, packet_id, ap_mac]
+      properties:
+        id:
+          type: integer
+          format: int64
+        observed_at:
+          type: string
+          format: date-time
+        received_at:
+          type: string
+          format: date-time
+        motion:
+          type: boolean
+        initial:
+          type: boolean
+        packet_id:
+          type: [integer, "null"]
+          minimum: 0
+          maximum: 255
+        ap_mac:
+          type: [string, "null"]
     LatestSensor:
       type: object
       required: [device, ts, values]
       properties:
+        motion:
+          $ref: "#/components/schemas/MotionState"
         device:
           $ref: "#/components/schemas/Device"
         ts:

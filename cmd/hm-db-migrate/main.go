@@ -39,27 +39,41 @@ func main() {
 	}
 	defer db.Close(context.Background())
 
+	if err := runMigrations(ctx, db, dir); err != nil {
+		log.Fatalf("migrate database: %v", err)
+	}
+}
+
+func runMigrations(ctx context.Context, db *pgx.Conn, dir string) error {
+	if _, err := db.Exec(ctx, `SELECT pg_advisory_lock(684903271121)`); err != nil {
+		return err
+	}
+	defer func() {
+		unlockCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		db.Exec(unlockCtx, `SELECT pg_advisory_unlock(684903271121)`)
+	}()
 	if err := ensureMigrationTable(ctx, db); err != nil {
-		log.Fatalf("ensure migration table: %v", err)
+		return err
 	}
 	migrations, err := loadMigrations(dir)
 	if err != nil {
-		log.Fatalf("load migrations: %v", err)
+		return err
 	}
-	for _, migration := range migrations {
-		applied, err := appliedMigration(ctx, db, migration)
+	for _, m := range migrations {
+		applied, err := appliedMigration(ctx, db, m)
 		if err != nil {
-			log.Fatalf("check migration %d: %v", migration.Version, err)
+			return err
 		}
 		if applied {
-			log.Printf("migration %04d already applied: %s", migration.Version, migration.Name)
 			continue
 		}
-		if err := applyMigration(ctx, db, migration); err != nil {
-			log.Fatalf("apply migration %d %s: %v", migration.Version, migration.Name, err)
+		if err = applyMigration(ctx, db, m); err != nil {
+			return fmt.Errorf("apply migration %d: %w", m.Version, err)
 		}
-		log.Printf("migration %04d applied: %s", migration.Version, migration.Name)
+		log.Printf("migration %04d applied: %s", m.Version, m.Name)
 	}
+	return nil
 }
 
 func ensureMigrationTable(ctx context.Context, db *pgx.Conn) error {
@@ -105,6 +119,11 @@ func loadMigrations(dir string) ([]migration, error) {
 	sort.Slice(migrations, func(i, j int) bool {
 		return migrations[i].Version < migrations[j].Version
 	})
+	for i := 1; i < len(migrations); i++ {
+		if migrations[i].Version == migrations[i-1].Version {
+			return nil, fmt.Errorf("duplicate migration version %d", migrations[i].Version)
+		}
+	}
 	return migrations, nil
 }
 

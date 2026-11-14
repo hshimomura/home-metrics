@@ -26,18 +26,29 @@ func decodeDataBatch(payload []byte, targets map[string]targetDevice) ([]bleRead
 		if decoded.empty() {
 			continue
 		}
-		if msg.TS.IsZero() {
-			decoded.TS = time.Now()
-		} else {
-			decoded.TS = msg.TS
+		decoded.ReceivedAt = time.Now()
+		decoded.TS = msg.TS
+		if decoded.TS.IsZero() || decoded.TS.After(decoded.ReceivedAt.Add(5*time.Minute)) {
+			decoded.TS = decoded.ReceivedAt
 		}
+		decoded.APMAC = normalizeMAC(msg.APMAC)
 		decoded.SensorMAC = mac
 		decoded.Label = target.Label
 		decoded.Location = strings.TrimSpace(target.Location)
 		decoded.IngestSource = target.IngestSource
 		decoded.SensorTypeCode = target.SensorTypeCode
 		decoded.SensorCategory = target.SensorCategory
-		if msg.RSSI != nil {
+		if target.SensorTypeCode == "shelly_blu_motion_zb" {
+			decoded.TemperatureC = nil
+			decoded.HumidityPercent = nil
+			decoded.PressureHPa = nil
+			decoded.CO2PPM = nil
+			decoded.Lux = nil
+			decoded.ETVOC = nil
+			decoded.SoilMoisturePercent = nil
+			decoded.ConductivityUSCM = nil
+		}
+		if msg.RSSI != nil && target.SensorTypeCode != "shelly_blu_motion_zb" {
 			decoded.RSSI = floatPtr(float64(*msg.RSSI))
 		}
 		readings = append(readings, decoded)
@@ -82,6 +93,9 @@ func parseDataSubscription(data []byte) (dataSubscription, error) {
 			return msg, err
 		}
 		data = rest
+		if (field == 1 || field == 2 || field == 3 || field == 4 || field == 12 || field == 16) && wire != 2 {
+			return msg, fmt.Errorf("unexpected wire type %d for subscription field %d", wire, field)
+		}
 		switch field {
 		case 1:
 			msg.DeviceID, data, err = consumeString(data)
@@ -120,6 +134,9 @@ func parseTimestamp(data []byte) time.Time {
 			return time.Time{}
 		}
 		data = rest
+		if (field == 1 || field == 2) && wire != 0 {
+			return time.Time{}
+		}
 		switch field {
 		case 1:
 			value, rest, err := consumeVarint(data)
@@ -142,7 +159,7 @@ func parseTimestamp(data []byte) time.Time {
 			}
 		}
 	}
-	if seconds == 0 && nanos == 0 {
+	if seconds < 0 || nanos < 0 || nanos >= 1000000000 || (seconds == 0 && nanos == 0) {
 		return time.Time{}
 	}
 	return time.Unix(seconds, int64(nanos)).UTC()
@@ -157,6 +174,9 @@ func parseBLEAdvertisement(data []byte) (string, *int32) {
 			return mac, rssi
 		}
 		data = rest
+		if (field == 1 && wire != 2) || (field == 2 && wire != 0) {
+			return "", nil
+		}
 		switch field {
 		case 1:
 			mac, data, err = consumeString(data)
@@ -202,6 +222,9 @@ func consumeKey(data []byte) (uint64, uint64, []byte, error) {
 	if err != nil {
 		return 0, 0, data, err
 	}
+	if key>>3 == 0 || key>>3 >= (1<<29) {
+		return 0, 0, data, fmt.Errorf("invalid protobuf field number")
+	}
 	return key >> 3, key & 0x7, rest, nil
 }
 
@@ -209,6 +232,9 @@ func consumeVarint(data []byte) (uint64, []byte, error) {
 	var value uint64
 	for i := 0; i < len(data) && i < 10; i++ {
 		b := data[i]
+		if i == 9 && b > 1 {
+			return 0, data, fmt.Errorf("protobuf varint overflow")
+		}
 		value |= uint64(b&0x7f) << uint(7*i)
 		if b < 0x80 {
 			return value, data[i+1:], nil

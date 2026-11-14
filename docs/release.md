@@ -47,7 +47,12 @@ ghcr.io/hshimomura/home-metrics@sha256:<digest>
 The CI workflow runs:
 
 ```sh
-make test
+./tools/generate-schema.sh # committed snapshot must match
+# CI uses an isolated TimescaleDB and HM_TEST_DATABASE_URL for integration tests.
+go vet ./...
+go test -race ./...
+go test ./cmd/hm-cisco-iot-orchestrator-collector -run '^$' -fuzz '^FuzzBLEDecoders$' -fuzztime=5s -parallel=2
+go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
 make build
 npx --yes @redocly/cli@1.34.5 lint docs/openapi.yaml
 ```
@@ -58,13 +63,14 @@ schema, initial baseline migration, OpenAPI contract, and web UI.
 
 ## Database Migrations
 
-`db/schema.sql` and `db/migrations/0001_initial_schema.sql` are the same current
-baseline. The migration history before this baseline is intentionally not
+`db/migrations/0001_initial_schema.sql` is the immutable baseline.
+`db/schema.sql` is generated from all numbered migrations and their checksums
+by `tools/generate-schema.sh`. The migration history before this baseline is intentionally not
 supported. Follow these rules:
 
 1. Never edit `0001` after it is deployed.
 2. Add `0002` and later for every future existing-volume schema change.
-3. Update `db/schema.sql` to the same final state.
+3. Regenerate `db/schema.sql` with `tools/generate-schema.sh`.
 4. Keep migration SQL compatible with `hm-db-migrate` checksum validation.
 5. Make API, workers, and collectors depend on successful migration completion.
 

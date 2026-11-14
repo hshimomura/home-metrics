@@ -5,6 +5,12 @@ management, current alert state, collector status, and schema data.
 `docs/openapi.yaml` is the machine-readable contract; this document explains
 runtime semantics that are easier to read in prose.
 
+Shelly BLU Motion ZB adds an optional `motion` state to device latest responses
+and `GET /api/devices/{mac}/motion-events` for discrete state transitions.
+Battery remains the existing `battery_percent` metric. See the
+[Shelly integration](shelly-blu-motion-zb.md) for timestamps, freshness,
+initial observations, and history query limits.
+
 The API document version is `2.0.0` because the application now belongs to the
 v2 database compatibility line. Existing telemetry response shapes remain
 compatible, but a v1 server binary must never be run against the v2 database.

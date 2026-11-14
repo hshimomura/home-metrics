@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/rand"
@@ -14,38 +15,52 @@ import (
 	"time"
 )
 
-func runMQTT(ctx context.Context, cfg config, onReady func(), onMessage func(topic string, payload []byte), onFlushTick func()) error {
-	conn, err := net.DialTimeout("tcp", cfg.MQTTAddr, 10*time.Second)
+const mqttOperationTimeout = 10 * time.Second
+
+func runMQTT(ctx context.Context, cfg config, onReady func(), onMessage func(topic string, payload []byte) error, onFlushTick func()) error {
+	dialer := net.Dialer{Timeout: mqttOperationTimeout}
+	conn, err := dialer.DialContext(ctx, "tcp", cfg.MQTTAddr)
 	if err != nil {
 		return err
 	}
 	defer conn.Close()
-	clientID := "home-metrics-" + randomHex(4)
-	if err := mqttConnect(conn, clientID, cfg.DataAppID, cfg.DataAPIKey, cfg.MQTTMaxPacket); err != nil {
+	stopClose := context.AfterFunc(ctx, func() { conn.Close() })
+	defer stopClose()
+	_ = conn.SetDeadline(time.Now().Add(mqttOperationTimeout))
+	if err = mqttConnect(conn, "home-metrics-"+randomHex(4), cfg.DataAppID, cfg.DataAPIKey, cfg.MQTTMaxPacket); err != nil {
 		return err
 	}
-	if err := mqttSubscribe(conn, 1, cfg.Topic, cfg.MQTTMaxPacket); err != nil {
+	if err = mqttSubscribe(conn, 1, cfg.Topic, cfg.MQTTMaxPacket); err != nil {
 		return err
 	}
+	_ = conn.SetDeadline(time.Time{})
 	if onReady != nil {
 		onReady()
 	}
+	reader := bufio.NewReader(conn)
 	heartbeat := time.NewTicker(cfg.StreamHeartbeat)
 	defer heartbeat.Stop()
 	var flushTick <-chan time.Time
-	var flushTicker *time.Ticker
 	if cfg.AggregateFlush > 0 {
-		flushTicker = time.NewTicker(cfg.AggregateFlush)
-		flushTick = flushTicker.C
-		defer flushTicker.Stop()
+		ticker := time.NewTicker(cfg.AggregateFlush)
+		defer ticker.Stop()
+		flushTick = ticker.C
 	}
-	for {
+	var pingAt time.Time
+	for ctx.Err() == nil {
+		if !pingAt.IsZero() && time.Since(pingAt) > 30*time.Second {
+			return errors.New("MQTT PINGRESP timeout")
+		}
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-heartbeat.C:
-			if err := writeMQTTPacket(conn, 0xc0, nil); err != nil {
-				return err
+			if pingAt.IsZero() {
+				_ = conn.SetWriteDeadline(time.Now().Add(mqttOperationTimeout))
+				if err = writeMQTTPacket(conn, 0xc0, nil); err != nil {
+					return err
+				}
+				pingAt = time.Now()
 			}
 		case <-flushTick:
 			if onFlushTick != nil {
@@ -53,22 +68,43 @@ func runMQTT(ctx context.Context, cfg config, onReady func(), onMessage func(top
 			}
 		default:
 		}
+		// A timeout while waiting for the first byte consumes nothing. After the
+		// first byte, any timeout ends this stream; partial frames are never retried.
 		_ = conn.SetReadDeadline(time.Now().Add(time.Second))
-		packetType, payload, err := readMQTTPacket(conn, cfg.MQTTMaxPacket)
-		if err != nil {
-			if ne, ok := err.(net.Error); ok && ne.Timeout() {
+		if _, err = reader.Peek(1); err != nil {
+			var ne net.Error
+			if errors.As(err, &ne) && ne.Timeout() {
 				continue
 			}
 			return err
 		}
-		if packetType == 3 {
+		_ = conn.SetReadDeadline(time.Now().Add(mqttOperationTimeout))
+		packetType, payload, err := readMQTTPacket(reader, cfg.MQTTMaxPacket)
+		if err != nil {
+			return err
+		}
+		switch packetType {
+		case 3:
 			topic, body, err := parsePublish(payload)
 			if err != nil {
 				return err
 			}
-			onMessage(topic, body)
+			if topic != cfg.Topic {
+				return fmt.Errorf("unexpected MQTT topic %q", topic)
+			}
+			if err = onMessage(topic, body); err != nil {
+				return err
+			}
+		case 13:
+			if len(payload) != 0 {
+				return errors.New("malformed MQTT PINGRESP")
+			}
+			pingAt = time.Time{}
+		default:
+			return fmt.Errorf("unexpected MQTT packet type %d", packetType)
 		}
 	}
+	return ctx.Err()
 }
 
 func mqttConnect(conn net.Conn, clientID string, username string, password string, maxPacket int) error {
@@ -87,7 +123,7 @@ func mqttConnect(conn net.Conn, clientID string, username string, password strin
 	if err != nil {
 		return err
 	}
-	if packetType != 2 || len(payload) < 2 {
+	if packetType != 2 || len(payload) != 2 {
 		return fmt.Errorf("unexpected MQTT CONNACK packet type=%d", packetType)
 	}
 	if payload[1] != 0 {
@@ -108,10 +144,10 @@ func mqttSubscribe(conn net.Conn, packetID uint16, topic string, maxPacket int) 
 	if err != nil {
 		return err
 	}
-	if packetType != 9 || len(body) < 3 {
+	if packetType != 9 || len(body) != 3 || binary.BigEndian.Uint16(body[:2]) != packetID {
 		return fmt.Errorf("unexpected MQTT SUBACK packet type=%d", packetType)
 	}
-	if body[len(body)-1] == 0x80 {
+	if body[len(body)-1] != 0 {
 		return errors.New("MQTT subscribe rejected")
 	}
 	return nil
@@ -133,7 +169,7 @@ func writeMQTTPacket(conn net.Conn, header byte, payload []byte) error {
 	frame.WriteByte(header)
 	writeRemainingLength(&frame, len(payload))
 	frame.Write(payload)
-	_, err := conn.Write(frame.Bytes())
+	_, err := io.Copy(conn, &frame)
 	return err
 }
 
@@ -141,6 +177,9 @@ func readMQTTPacket(conn io.Reader, maxPacket int) (int, []byte, error) {
 	header := make([]byte, 1)
 	if _, err := io.ReadFull(conn, header); err != nil {
 		return 0, nil, err
+	}
+	if header[0]>>4 == 3 && header[0]&6 != 0 {
+		return 0, nil, errors.New("unsupported MQTT publish QoS")
 	}
 	length, err := readRemainingLength(conn)
 	if err != nil {

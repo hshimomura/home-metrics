@@ -39,6 +39,7 @@ web/                                   metrics and admin pages
 - [OpenAPI contract](docs/openapi.yaml)
 - [Release and deployment](docs/release.md)
 - [Xiaomi Flower Care integration](docs/xiaomi-flower-care-cisco-sensor-connect.md)
+- [Shelly BLU Motion ZB integration](docs/shelly-blu-motion-zb.md)
 
 These are the only active design and operation documents. Completed plans and
 downstream RoomPlus/Grafana artifacts are intentionally not duplicated here.
@@ -182,3 +183,9 @@ published image by digest. After changing `main`:
 
 See [docs/release.md](docs/release.md) for the complete release, migration,
 rollback, and nms4 verification procedure.
+
+### ビルドと DB スキーマの更新
+
+ビルド・CI は Go 1.26.11 を使用する（依存に必要な最低 Go は1.25）。
+新規 migration を追加したら `./tools/generate-schema.sh` で新規 DB 用スキーマと台帳を再生成する。
+適用済み migration は編集しない。CI の検査・隔離 DB テストは [リリース手順](docs/release.md) を参照。

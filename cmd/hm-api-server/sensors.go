@@ -35,6 +35,7 @@ type sensorTypeResponse struct {
 }
 
 type latestResponse struct {
+	Motion          *motionResponse      `json:"motion,omitempty"`
 	Device          deviceResponse       `json:"device"`
 	TS              time.Time            `json:"ts"`
 	Values          map[string]*float64  `json:"values"`
@@ -121,15 +122,28 @@ func (api *apiServer) handleDeviceLatest(w http.ResponseWriter, r *http.Request)
 	}
 
 	snapshot, err := api.loadLatestSnapshot(r.Context(), mac)
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, pgx.ErrNoRows) && device.SensorCategory != "motion" {
 		writeError(w, http.StatusNotFound, "sensor value not found")
 		return
-	} else if err != nil {
+	} else if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, http.StatusInternalServerError, "query latest value")
 		return
 	}
 
+	var motion *motionResponse
+	if device.SensorCategory == "motion" {
+		motion, err = api.loadMotion(r.Context(), mac, &snapshot)
+		if err != nil {
+			writeError(w, 500, "query motion state")
+			return
+		}
+		if motion == nil && snapshot.TS.IsZero() {
+			writeError(w, 404, "sensor value not found")
+			return
+		}
+	}
 	writeJSON(w, http.StatusOK, latestResponse{
+		Motion:          motion,
 		Device:          device,
 		TS:              snapshot.TS,
 		Values:          snapshot.Values,

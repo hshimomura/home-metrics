@@ -205,7 +205,9 @@ func (r *statusReporter) MarkSuccess(ctx context.Context) {
 	if r == nil || r.db == nil {
 		return
 	}
-	if err := collectorstatus.MarkSuccess(ctx, r.db, r.target); err != nil {
+	opCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	if err := collectorstatus.MarkSuccess(opCtx, r.db, r.target); err != nil {
 		log.Printf("record collector success: %v", err)
 	}
 }
@@ -214,7 +216,9 @@ func (r *statusReporter) MarkDataSuccess(ctx context.Context) {
 	if r == nil || r.db == nil {
 		return
 	}
-	if err := collectorstatus.MarkDataSuccess(ctx, r.db, r.target); err != nil {
+	opCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	if err := collectorstatus.MarkDataSuccess(opCtx, r.db, r.target); err != nil {
 		log.Printf("record collector data success: %v", err)
 	}
 }
@@ -223,7 +227,9 @@ func (r *statusReporter) MarkFailure(ctx context.Context, failure error) {
 	if r == nil || r.db == nil {
 		return
 	}
-	if err := collectorstatus.MarkFailure(ctx, r.db, r.target, failure); err != nil {
+	opCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	if err := collectorstatus.MarkFailure(opCtx, r.db, r.target, failure); err != nil {
 		log.Printf("record collector failure: %v", err)
 	}
 }

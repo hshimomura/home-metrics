@@ -212,6 +212,16 @@ marked failed.
 
 ## Contract Enforcement
 
+Shelly BLU Motion ZB motion is a discrete state, separate from the numeric
+metric registry and minute medians. The Sensor Connect collector persists
+state transitions through `record_sensor_motion`; row locking and observation
+time checks prevent duplicate transitions and late state rollback. Battery
+continues through the existing minute/rollup path, with its exact latest
+observation retained in `sensor_motion_state`. Fresh-install SQL registers the
+checksums of migrations already included in its snapshot; existing databases
+apply the additive migration normally. See the
+[Shelly integration](shelly-blu-motion-zb.md).
+
 `internal/sensor.Metrics` is the canonical Go metric registry. Contract tests
 ensure every metric is represented in the fresh schema, weighted-rollup
 migration, OpenAPI contract, and web UI. CI runs Go tests, builds every runtime

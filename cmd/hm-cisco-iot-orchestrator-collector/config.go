@@ -14,6 +14,7 @@ import (
 
 func loadConfig() config {
 	return config{
+		MotionQueueDir:    envString("CISCO_IOT_ORCH_MOTION_QUEUE_DIR", "/var/lib/home-metrics/motion-queue"),
 		DBDSN:             envString("BLE_DB_DSN", defaultDBDSN),
 		APIURL:            envString("CISCO_IOT_ORCH_API_URL", defaultAPIURL),
 		MQTTAddr:          envString("CISCO_IOT_ORCH_MQTT_ADDR", defaultMQTTAddr),
@@ -151,4 +152,20 @@ func envBool(name string, fallback bool) bool {
 		log.Printf("invalid %s=%q, using %t", name, value, fallback)
 		return fallback
 	}
+}
+
+func (c config) validate() error {
+	if c.StreamHeartbeat <= 0 || c.StreamHeartbeat > 60*time.Second {
+		return errors.New("MQTT heartbeat must be positive and at most 60s")
+	}
+	if c.ReconnectMinDelay <= 0 || c.ReconnectMaxDelay < c.ReconnectMinDelay {
+		return errors.New("invalid MQTT reconnect delays")
+	}
+	if c.AggregateFlush <= 0 || c.PendingLog <= 0 {
+		return errors.New("aggregate and pending log intervals must be positive")
+	}
+	if c.MQTTMaxPacket < 1 || c.MQTTMaxPacket > 16<<20 {
+		return errors.New("MQTT maximum packet must be 1..16777216 bytes")
+	}
+	return nil
 }

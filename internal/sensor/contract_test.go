@@ -1,6 +1,8 @@
 package sensor
 
 import (
+	"crypto/sha256"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -18,15 +20,35 @@ func TestMetricContractCoversSchemaAPIWebAndRollups(t *testing.T) {
 	openAPI := readContractFile(t, filepath.Join(root, "docs", "openapi.yaml"))
 	web := readContractFile(t, filepath.Join(root, "web", "index.html"))
 	migration := readContractFile(t, filepath.Join(root, "db", "migrations", "0001_initial_schema.sql"))
-	if migration != schema {
-		t.Fatal("db/schema.sql and 0001_initial_schema.sql must remain identical")
+	if !strings.HasPrefix(schema, migration) {
+		t.Fatal("db/schema.sql must preserve the immutable initial schema prefix")
 	}
 
+	motionMigration := readContractFile(t, filepath.Join(root, "db", "migrations", "0002_shelly_motion.sql"))
+	if !strings.Contains(schema, motionMigration) {
+		t.Fatal("fresh schema must include motion migration")
+	}
+
+	baseSchema := migration
+	paths, err := filepath.Glob(filepath.Join(root, "db", "migrations", "*.sql"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range paths {
+		sql := readContractFile(t, path)
+		if !strings.Contains(schema, sql) {
+			t.Fatalf("fresh schema missing %s", path)
+		}
+		sum := sha256.Sum256([]byte(sql))
+		if !strings.Contains(schema, fmt.Sprintf("%x", sum)) {
+			t.Fatal("fresh-install migration checksum missing or stale")
+		}
+	}
 	for _, metric := range Metrics {
-		if count := strings.Count(schema, metric.Column+" double precision"); count != 4 {
+		if count := strings.Count(baseSchema, metric.Column+" double precision"); count != 4 {
 			t.Errorf("schema column %s appears %d times, want sensor_minute plus three rollups", metric.Column, count)
 		}
-		if count := strings.Count(schema, metric.Column+"_count bigint"); count != 3 {
+		if count := strings.Count(baseSchema, metric.Column+"_count bigint"); count != 3 {
 			t.Errorf("schema count column %s_count appears %d times, want three rollups", metric.Column, count)
 		}
 		if !strings.Contains(openAPI, "- "+metric.Key) {

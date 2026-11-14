@@ -169,7 +169,7 @@ func main() {
 		TargetType:    "ble_adapter",
 		TargetKey:     string(adapterPath),
 	}
-	log.Printf("BLE collector started adapter=%s poll=%s db=%s outlier_filter=%t", adapterPath, pollInterval, dsn, outliers.Enabled)
+	log.Printf("BLE collector started adapter=%s poll=%s outlier_filter=%t", adapterPath, pollInterval, outliers.Enabled)
 	for {
 		select {
 		case <-ctx.Done():

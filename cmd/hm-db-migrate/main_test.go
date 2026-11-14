@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-func TestInitialSchemaIsTheOnlyMigrationAndParses(t *testing.T) {
+func TestSchemaMigrationsParse(t *testing.T) {
 	_, file, _, ok := runtime.Caller(0)
 	if !ok {
 		t.Fatal("resolve test path")
@@ -17,8 +17,16 @@ func TestInitialSchemaIsTheOnlyMigrationAndParses(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load migrations: %v", err)
 	}
-	if len(migrations) != 1 || migrations[0].Version != 1 || migrations[0].Name != "initial_schema" {
-		t.Fatalf("migrations = %+v, want only 0001_initial_schema", migrations)
+	if len(migrations) < 3 || migrations[0].Version != 1 || migrations[0].Name != "initial_schema" {
+		t.Fatalf("migrations = %+v, want baseline and additive motion migration", migrations)
+	}
+	if migrations[1].Version != 2 || migrations[1].Name != "shelly_motion" {
+		t.Fatal("missing motion migration")
+	}
+	for _, m := range migrations {
+		if _, err := splitSQLStatements(m.SQL); err != nil {
+			t.Fatalf("parse %s: %v", m.Name, err)
+		}
 	}
 	statements, err := splitSQLStatements(migrations[0].SQL)
 	if err != nil {

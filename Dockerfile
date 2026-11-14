@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 
-FROM golang:1.26.4-bookworm AS builder
+FROM golang:1.26.11-bookworm AS builder
 
 WORKDIR /src
 
@@ -17,6 +17,9 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd --system home_metrics \
     && useradd --system --gid home_metrics --home-dir /var/lib/home-metrics --create-home home_metrics
+
+RUN mkdir -p /var/lib/home-metrics/motion-queue \
+    && chown -R home_metrics:home_metrics /var/lib/home-metrics
 
 WORKDIR /app
 

@@ -75,6 +75,7 @@ type config struct {
 	PendingLog        time.Duration
 	MQTTMaxPacket     int
 	TLSSkipVerify     bool
+	MotionQueueDir    string
 	ControlMu         *sync.Mutex
 }
 
@@ -111,6 +112,10 @@ type targetRegistry struct {
 }
 
 type bleReading struct {
+	Motion              *bool
+	PacketID            *int
+	APMAC               string
+	ReceivedAt          time.Time
 	TS                  time.Time
 	SensorMAC           string
 	Label               string
@@ -152,10 +157,11 @@ type aggregate struct {
 }
 
 type collector struct {
-	mu      sync.Mutex
-	db      sensorDB
-	windows map[string]*aggregate
-	flushFn func(context.Context, *aggregate) (bool, error)
+	mu          sync.Mutex
+	db          sensorDB
+	windows     map[string]*aggregate
+	flushFn     func(context.Context, *aggregate) (bool, error)
+	motionQueue *motionQueue
 }
 
 type statusReporter struct {
@@ -209,6 +215,9 @@ func main() {
 	defer stop()
 
 	cfg := loadConfig()
+	if err := cfg.validate(); err != nil {
+		log.Fatal(err)
+	}
 	if source := strings.ToLower(envString("SENSOR_INGEST_SOURCE", "cisco_iot_orchestrator")); source != "cisco_iot_orchestrator" && source != "cisco-iot-orchestrator" && source != "cisco_iot" && source != "cisco-iot" {
 		log.Printf("Cisco Sensor Connect (IoT Orchestrator) collector disabled by SENSOR_INGEST_SOURCE=%s", source)
 		return
@@ -247,6 +256,17 @@ func main() {
 		},
 	}
 	c := &collector{db: db, windows: map[string]*aggregate{}}
+	if cfg.DryRun {
+		c.db = nil
+		reporter.db = nil
+	}
+	if !cfg.DryRun {
+		c.motionQueue, err = openMotionQueue(cfg.MotionQueueDir)
+		if err != nil {
+			log.Fatalf("open motion queue: %v", err)
+		}
+		defer c.motionQueue.Close()
+	}
 
 	if cfg.RegisterDataApp {
 		if err := registerDataApp(ctx, cfg); err != nil {
@@ -257,6 +277,12 @@ func main() {
 
 	log.Printf("Cisco Sensor Connect (IoT Orchestrator) collector started mqtt=%s topic=%s data_app=%s control_app=%s dry_run=%t", cfg.MQTTAddr, cfg.Topic, cfg.DataAppID, cfg.ControlAppID, cfg.DryRun)
 	var workers sync.WaitGroup
+	if c.motionQueue != nil {
+		storageReporter := &statusReporter{db: db, target: collectorstatus.Target{CollectorName: "hm-cisco-iot-orchestrator-collector", TargetType: "storage", TargetKey: "shelly_motion"}}
+		workers.Add(1)
+		go func() { defer workers.Done(); runMotionWriter(ctx, c.motionQueue, c, storageReporter) }()
+	}
+
 	if !cfg.DryRun && db != nil {
 		workers.Add(1)
 		go func() {
@@ -284,7 +310,7 @@ func runWithReconnect(ctx context.Context, cfg config, targets map[string]target
 		err := runMQTT(ctx, cfg, func() {
 			backoff.Reset()
 			reporter.MarkSuccess(ctx)
-		}, func(topic string, payload []byte) {
+		}, func(topic string, payload []byte) error {
 			if cfg.Debug {
 				log.Printf("mqtt message topic=%s bytes=%d", topic, len(payload))
 			}
@@ -292,12 +318,20 @@ func runWithReconnect(ctx context.Context, cfg config, targets map[string]target
 			if err != nil {
 				log.Printf("decode MQTT protobuf: %v", err)
 				reporter.MarkFailure(ctx, err)
-				return
+				return err
 			}
 			for _, reading := range readings {
+				if reading.SensorTypeCode == "shelly_blu_motion_zb" && c.motionQueue != nil {
+					if err := c.motionQueue.Push(reading); err != nil {
+						reporter.MarkFailure(ctx, err)
+						return err
+					}
+					continue
+				}
 				c.add(reading)
 			}
 			lastPendingLog = flushPending(ctx, c, reporter, "message", cfg.PendingLog, lastPendingLog)
+			return nil
 		}, func() {
 			lastPendingLog = flushPending(ctx, c, reporter, "ticker", cfg.PendingLog, lastPendingLog)
 		})
@@ -346,7 +380,9 @@ func (b *reconnectBackoff) Next() time.Duration {
 
 func flushPending(ctx context.Context, c *collector, reporter *statusReporter, reason string, logEvery time.Duration, lastLog time.Time) time.Time {
 	now := time.Now()
-	flushed, err := c.flushCompleted(ctx, now.Truncate(time.Minute))
+	flushCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	flushed, err := c.flushCompleted(flushCtx, now.Truncate(time.Minute))
+	cancel()
 	if err != nil {
 		count, oldest := c.pendingSummary(now)
 		log.Printf("flush Cisco Sensor Connect readings reason=%s pending_windows=%d oldest_age=%s: %v", reason, count, oldest.Round(time.Second), err)

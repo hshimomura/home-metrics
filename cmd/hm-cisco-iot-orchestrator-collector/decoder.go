@@ -15,13 +15,22 @@ func decodeBLEPayload(data []byte) bleReading {
 	}
 	reading := bleReading{}
 	for _, serviceData := range serviceDataList {
-		reading.merge(decodeServiceData(hex.EncodeToString(serviceData)))
+		if serviceData.UUID == 0xfcd2 {
+			reading.merge(decodeBTHome(serviceData.Data))
+		} else {
+			reading.merge(decodeServiceData(hex.EncodeToString(serviceData.Data)))
+		}
 	}
 	return reading
 }
 
-func serviceDataFromAdvertisement(data []byte) [][]byte {
-	var out [][]byte
+type advertisedServiceData struct {
+	UUID uint16
+	Data []byte
+}
+
+func serviceDataFromAdvertisement(data []byte) []advertisedServiceData {
+	var out []advertisedServiceData
 	for len(data) >= 2 {
 		length := int(data[0])
 		if length == 0 {
@@ -34,8 +43,8 @@ func serviceDataFromAdvertisement(data []byte) [][]byte {
 		adData := data[2 : length+1]
 		if adType == 0x16 && len(adData) >= 2 {
 			uuid := binary.LittleEndian.Uint16(adData[:2])
-			if uuid == 0xfe6a || uuid == 0xffe1 || uuid == 0xfeaa || uuid == 0xfe95 {
-				out = append(out, adData[2:])
+			if uuid == 0xfe6a || uuid == 0xffe1 || uuid == 0xfeaa || uuid == 0xfe95 || uuid == 0xfcd2 {
+				out = append(out, advertisedServiceData{UUID: uuid, Data: adData[2:]})
 			}
 		}
 		data = data[length+1:]
@@ -47,6 +56,9 @@ func decodeServiceData(payloadHex string) bleReading {
 	data, err := hex.DecodeString(payloadHex)
 	if err != nil {
 		return bleReading{}
+	}
+	if len(data) > 0 && data[0]>>5 == 2 {
+		return decodeBTHome(data)
 	}
 	if looksLikeXiaomiFE95(data) {
 		return sanitizeReading(decodeXiaomiFE95(data))
@@ -209,6 +221,12 @@ func sanitizeReading(r bleReading) bleReading {
 }
 
 func (r *bleReading) merge(other bleReading) {
+	if other.Motion != nil {
+		r.Motion = other.Motion
+	}
+	if other.PacketID != nil {
+		r.PacketID = other.PacketID
+	}
 	if other.TemperatureC != nil {
 		r.TemperatureC = other.TemperatureC
 	}
@@ -239,7 +257,7 @@ func (r *bleReading) merge(other bleReading) {
 }
 
 func (r bleReading) empty() bool {
-	return r.TemperatureC == nil &&
+	return r.Motion == nil && r.TemperatureC == nil &&
 		r.HumidityPercent == nil &&
 		r.BatteryPercent == nil &&
 		r.RSSI == nil &&

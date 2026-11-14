@@ -140,14 +140,15 @@ func decodeHexValue(value string) ([]byte, error) {
 	return data, nil
 }
 
+var verifiedHTTPClient = &http.Client{Timeout: 60 * time.Second}
+var labHTTPClient = &http.Client{
+	Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}, // Lab Sensor Connect uses an IP-address HTTPS endpoint.
+	Timeout:   60 * time.Second,
+}
+
 func httpClient(cfg config) *http.Client {
-	if !cfg.TLSSkipVerify {
-		return http.DefaultClient
+	if cfg.TLSSkipVerify {
+		return labHTTPClient
 	}
-	return &http.Client{
-		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, //nolint:gosec // Lab IoT Orchestrator uses an IP-address HTTPS endpoint.
-		},
-		Timeout: 60 * time.Second,
-	}
+	return verifiedHTTPClient
 }

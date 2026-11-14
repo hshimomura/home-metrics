@@ -1,0 +1,144 @@
+[
+  {
+    "datasource": {
+      "type": "grafana-postgresql-datasource",
+      "uid": "cfl59gmbbod8gf"
+    },
+    "description": "Shelly BLU Motion ZB の保存された検出イベント数。最小5分、長い表示期間では集計幅を自動調整。解除と初期状態を除外。記録開始前は表示しません。0回は保存イベントなしを示し、未受信区間での実際の動きを保証しません。",
+    "fieldConfig": {
+      "defaults": {
+        "color": {
+          "fixedColor": "blue",
+          "mode": "fixed"
+        },
+        "custom": {
+          "axisBorderShow": false,
+          "axisLabel": "検知回数",
+          "barAlignment": 0,
+          "drawStyle": "bars",
+          "fillOpacity": 80,
+          "lineWidth": 1,
+          "showPoints": "never",
+          "spanNulls": false,
+          "stacking": {
+            "group": "A",
+            "mode": "none"
+          }
+        },
+        "decimals": 0,
+        "min": 0,
+        "unit": "short"
+      },
+      "overrides": []
+    },
+    "gridPos": {
+      "h": 8,
+      "w": 24,
+      "x": 0,
+      "y": 59
+    },
+    "id": 28,
+    "interval": "5m",
+    "options": {
+      "legend": {
+        "calcs": [
+          "sum"
+        ],
+        "displayMode": "table",
+        "placement": "bottom",
+        "showLegend": true
+      },
+      "tooltip": {
+        "mode": "single",
+        "sort": "none"
+      }
+    },
+    "pluginVersion": "12.2.8",
+    "targets": [
+      {
+        "datasource": {
+          "type": "grafana-postgresql-datasource",
+          "uid": "cfl59gmbbod8gf"
+        },
+        "format": "time_series",
+        "rawQuery": true,
+        "rawSql": "WITH first_observation AS (\n  SELECT min(observed_at) AS ts\n  FROM sensor_motion_events\n  WHERE mac = 'fc:4d:6a:26:53:e3'\n), buckets AS (\n  SELECT generate_series(\n    greatest(time_bucket(greatest('$__interval'::interval, interval '5 minutes'), $__timeFrom()::timestamptz), time_bucket(greatest('$__interval'::interval, interval '5 minutes'), ts)),\n    time_bucket(greatest('$__interval'::interval, interval '5 minutes'), $__timeTo()::timestamptz),\n    greatest('$__interval'::interval, interval '5 minutes')\n  ) AS bucket\n  FROM first_observation WHERE ts IS NOT NULL\n), detections AS (\n  SELECT time_bucket(greatest('$__interval'::interval, interval '5 minutes'), observed_at) AS bucket, count(*) AS value\n  FROM sensor_motion_events\n  WHERE $__timeFilter(observed_at)\n    AND mac = 'fc:4d:6a:26:53:e3'\n    AND motion = true AND initial = false\n  GROUP BY 1\n)\nSELECT b.bucket AS \"time\", coalesce(d.value, 0)::bigint AS \"Shelly Motion\"\nFROM buckets b LEFT JOIN detections d USING (bucket)\nORDER BY 1",
+        "refId": "A"
+      }
+    ],
+    "title": "人感センサー 検知回数",
+    "type": "timeseries"
+  },
+  {
+    "datasource": {
+      "type": "grafana-postgresql-datasource",
+      "uid": "cfl59gmbbod8gf"
+    },
+    "description": "Shelly BLU Motion ZB の電池残量（%）。期間に応じて分・1時間・12時間・1日集計を切り替えます。直近1日以上は分データを使い、長期集計の更新待ちによる最新値の欠落を防ぎます。",
+    "fieldConfig": {
+      "defaults": {
+        "color": {
+          "fixedColor": "green",
+          "mode": "fixed"
+        },
+        "custom": {
+          "axisBorderShow": false,
+          "axisLabel": "電池残量 (%)",
+          "drawStyle": "line",
+          "fillOpacity": 10,
+          "lineInterpolation": "stepAfter",
+          "lineWidth": 2,
+          "pointSize": 4,
+          "showPoints": "always",
+          "spanNulls": false,
+          "stacking": {
+            "group": "A",
+            "mode": "none"
+          }
+        },
+        "decimals": 0,
+        "max": 100,
+        "min": 0,
+        "unit": "percent"
+      },
+      "overrides": []
+    },
+    "gridPos": {
+      "h": 8,
+      "w": 24,
+      "x": 0,
+      "y": 67
+    },
+    "id": 29,
+    "options": {
+      "legend": {
+        "calcs": [
+          "lastNotNull",
+          "min"
+        ],
+        "displayMode": "table",
+        "placement": "bottom",
+        "showLegend": true
+      },
+      "tooltip": {
+        "mode": "single",
+        "sort": "none"
+      }
+    },
+    "pluginVersion": "12.2.8",
+    "targets": [
+      {
+        "datasource": {
+          "type": "grafana-postgresql-datasource",
+          "uid": "cfl59gmbbod8gf"
+        },
+        "format": "time_series",
+        "rawQuery": true,
+        "rawSql": "WITH bounds AS (\n  SELECT ($__timeTo()::timestamptz - $__timeFrom()::timestamptz) AS span,\n    CASE\n      WHEN ($__timeTo()::timestamptz - $__timeFrom()::timestamptz) <= interval '30 days'\n        THEN time_bucket('1 hour', now() - interval '1 day')\n      WHEN ($__timeTo()::timestamptz - $__timeFrom()::timestamptz) <= interval '90 days'\n        THEN time_bucket('12 hours', now() - interval '1 day')\n      ELSE time_bucket('1 day', now() - interval '1 day')\n    END AS cutover\n), readings AS (\nSELECT sm.ts, sm.battery_percent AS value, 1 AS weight\nFROM sensor_minute sm CROSS JOIN bounds b\nWHERE $__timeFilter(sm.ts) AND sm.mac = 'fc:4d:6a:26:53:e3'\n  AND sm.battery_percent IS NOT NULL AND (b.span <= interval '1 day' OR sm.ts >= b.cutover)\nUNION ALL\nSELECT sm.ts, sm.battery_percent AS value, sm.battery_percent_count AS weight\nFROM sensor_1hour sm CROSS JOIN bounds b\nWHERE $__timeFilter(sm.ts) AND sm.mac = 'fc:4d:6a:26:53:e3'\n  AND sm.battery_percent IS NOT NULL AND b.span > interval '1 day' AND b.span <= interval '30 days' AND sm.ts < b.cutover\nUNION ALL\nSELECT sm.ts, sm.battery_percent AS value, sm.battery_percent_count AS weight\nFROM sensor_12hour sm CROSS JOIN bounds b\nWHERE $__timeFilter(sm.ts) AND sm.mac = 'fc:4d:6a:26:53:e3'\n  AND sm.battery_percent IS NOT NULL AND b.span > interval '30 days' AND b.span <= interval '90 days' AND sm.ts < b.cutover\nUNION ALL\nSELECT sm.ts, sm.battery_percent AS value, sm.battery_percent_count AS weight\nFROM sensor_1day sm CROSS JOIN bounds b\nWHERE $__timeFilter(sm.ts) AND sm.mac = 'fc:4d:6a:26:53:e3'\n  AND sm.battery_percent IS NOT NULL AND b.span > interval '90 days' AND sm.ts < b.cutover\n)\nSELECT time_bucket('$__interval'::interval, ts) AS \"time\",\n  sum(value * weight) / NULLIF(sum(weight), 0) AS \"Shelly Motion\"\nFROM readings\nGROUP BY 1 ORDER BY 1",
+        "refId": "A"
+      }
+    ],
+    "title": "人感センサー バッテリー残量",
+    "type": "timeseries"
+  }
+]

@@ -56,6 +56,15 @@
         "history_backfill": false,
         "max_history_entries": 24
       }
+    },
+    {
+      "mac": "aa:bb:cc:dd:ee:05",
+      "label": "Hall motion",
+      "location": "Hall",
+      "ingest_source": "cisco_sensor_connect",
+      "sensor_type_code": "shelly_blu_motion_zb",
+      "sensor_category": "motion",
+      "enabled": true
     }
   ]
 }

@@ -45,6 +45,7 @@ services:
       CISCO_SPACES_ALLOW_SECONDARY: ${CISCO_SPACES_ALLOW_SECONDARY:-false}
       COLLECTOR_STATUS_STALE_AFTER: ${COLLECTOR_STATUS_STALE_AFTER:-5m}
       GATT_CONTROL_STATUS_STALE_AFTER: ${GATT_CONTROL_STATUS_STALE_AFTER:-26h}
+      MOTION_SENSOR_STALE_AFTER: ${MOTION_SENSOR_STALE_AFTER:-45m}
     ports:
       - "${API_BIND_ADDR:-0.0.0.0}:${API_PORT:-8080}:8080"
     command: ["hm-api-server"]
@@ -152,8 +153,10 @@ services:
       CISCO_IOT_ORCH_RECONNECT_MAX_DELAY: ${CISCO_IOT_ORCH_RECONNECT_MAX_DELAY:-60s}
       CISCO_IOT_ORCH_STREAM_HEARTBEAT: ${CISCO_IOT_ORCH_STREAM_HEARTBEAT:-60s}
       CISCO_IOT_ORCH_AGGREGATE_FLUSH_INTERVAL: ${CISCO_IOT_ORCH_AGGREGATE_FLUSH_INTERVAL:-10s}
+      CISCO_IOT_ORCH_MOTION_QUEUE_DIR: /var/lib/home-metrics/motion-queue
       CISCO_IOT_ORCH_PENDING_LOG_INTERVAL: ${CISCO_IOT_ORCH_PENDING_LOG_INTERVAL:-5m}
     volumes:
+      - motion_queue:/var/lib/home-metrics/motion-queue
       - ${SENSORS_FILE:-./examples/sensors.json.example}:/etc/home-metrics/sensors.json:ro
     command: ["hm-cisco-iot-orchestrator-collector"]
 
@@ -253,4 +256,5 @@ services:
     command: ["hm-ble-collector"]
 
 volumes:
+  motion_queue:
   pgdata:
