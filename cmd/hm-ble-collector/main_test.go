@@ -1,13 +1,17 @@
 package main
 
 import (
+	"encoding/hex"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"home-metrics/internal/bledecode"
 	"home-metrics/internal/sensorstore"
+
+	"github.com/godbus/dbus/v5"
 )
 
 func TestLoadTargetRegistrySelectsOnlyBLEOwnedDevices(t *testing.T) {
@@ -34,12 +38,25 @@ func TestLoadTargetRegistrySelectsOnlyBLEOwnedDevices(t *testing.T) {
 func TestSensorMinuteUpsertUsesSparseMerge(t *testing.T) {
 	for _, column := range []string{
 		"temperature_c", "humidity_percent", "battery_percent", "rssi_dbm",
-		"pressure_hpa", "co2_ppm", "lux", "etvoc",
+		"pressure_hpa", "co2_ppm", "lux", "etvoc", "soil_moisture_percent", "conductivity_us_cm",
 	} {
 		want := column + " = COALESCE(EXCLUDED." + column + ", sensor_minute." + column + ")"
 		if !strings.Contains(sensorstore.UpsertMinuteSQL, want) {
 			t.Fatalf("upsert SQL does not preserve sparse %s", column)
 		}
+	}
+}
+
+func TestServiceDataPayloadsReturnsAllValues(t *testing.T) {
+	props := map[string]dbus.Variant{
+		"ServiceData": dbus.MakeVariant(map[string]dbus.Variant{
+			"b": dbus.MakeVariant([]byte{2}),
+			"a": dbus.MakeVariant([]byte{1}),
+		}),
+	}
+	payloads := serviceDataPayloads(props)
+	if len(payloads) != 2 || payloads[0][0] != 1 || payloads[1][0] != 2 {
+		t.Fatalf("payloads=%v", payloads)
 	}
 }
 
@@ -100,7 +117,14 @@ func TestSanitizeReadingDropsSentinelsAndImplausibleValues(t *testing.T) {
 }
 
 func TestDecodeServiceDataExtractsEnvGasValues(t *testing.T) {
-	got := decodeServiceData("0305177bd47b44041f071a0403ff00000313991303200a00")
+	decode := func(payload string) reading {
+		data, err := hex.DecodeString(payload)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return readingFromDecoded(bledecode.DecodeServiceData(data))
+	}
+	got := decode("0305177bd47b44041f071a0403ff00000313991303200a00")
 	if got.PressureHPa == nil || *got.PressureHPa != 1007.32 {
 		t.Fatalf("pressure=%v, want 1007.32", got.PressureHPa)
 	}
@@ -114,7 +138,7 @@ func TestDecodeServiceDataExtractsEnvGasValues(t *testing.T) {
 		t.Fatalf("lux=%v, want 10", got.Lux)
 	}
 
-	got = decodeServiceData("0305177bd47b44041f08070003ff00000313991303200a00")
+	got = decode("0305177bd47b44041f08070003ff00000313991303200a00")
 	if got.ETVOC == nil || *got.ETVOC != 7 {
 		t.Fatalf("etvoc=%v, want 7", got.ETVOC)
 	}

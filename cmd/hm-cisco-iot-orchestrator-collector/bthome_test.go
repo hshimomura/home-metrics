@@ -4,10 +4,13 @@ import (
 	"context"
 	"encoding/hex"
 	"errors"
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 	"testing"
 	"time"
+
+	"home-metrics/internal/bledecode"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 func TestShellyCapturedAdvertisements(t *testing.T) {
@@ -27,7 +30,7 @@ func TestShellyCapturedAdvertisements(t *testing.T) {
 	} {
 		t.Run(tc.hex, func(t *testing.T) {
 			b, _ := hex.DecodeString(tc.hex)
-			r := decodeBTHome(b)
+			r := bledecode.DecodeServiceData(b)
 			if motionLabel(r.Motion) != tc.motion {
 				t.Fatalf("motion=%s want %s", motionLabel(r.Motion), tc.motion)
 			}

@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -16,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	"home-metrics/internal/bledecode"
 	"home-metrics/internal/collectorstatus"
 	"home-metrics/internal/sensor"
 	"home-metrics/internal/sensorstore"
@@ -71,30 +71,34 @@ type targetRegistry struct {
 }
 
 type reading struct {
-	TS              time.Time
-	SensorMAC       string
-	RSSI            *float64
-	TemperatureC    *float64
-	HumidityPercent *float64
-	BatteryPercent  *float64
-	PressureHPa     *float64
-	CO2PPM          *float64
-	Lux             *float64
-	ETVOC           *float64
+	TS                  time.Time
+	SensorMAC           string
+	RSSI                *float64
+	TemperatureC        *float64
+	HumidityPercent     *float64
+	BatteryPercent      *float64
+	PressureHPa         *float64
+	CO2PPM              *float64
+	Lux                 *float64
+	ETVOC               *float64
+	SoilMoisturePercent *float64
+	ConductivityUSCM    *float64
 }
 
 type aggregate struct {
-	SensorMAC       string
-	Window          time.Time
-	RSSI            []float64
-	TemperatureC    []float64
-	HumidityPercent []float64
-	BatteryPercent  []float64
-	PressureHPa     []float64
-	CO2PPM          []float64
-	Lux             []float64
-	ETVOC           []float64
-	LastComparable  string
+	SensorMAC           string
+	Window              time.Time
+	RSSI                []float64
+	TemperatureC        []float64
+	HumidityPercent     []float64
+	BatteryPercent      []float64
+	PressureHPa         []float64
+	CO2PPM              []float64
+	Lux                 []float64
+	ETVOC               []float64
+	SoilMoisturePercent []float64
+	ConductivityUSCM    []float64
+	LastComparable      string
 }
 
 type collector struct {
@@ -390,19 +394,23 @@ func pollReadings(conn *dbus.Conn, targets map[string]targetDevice) ([]reading, 
 		if !ok {
 			continue
 		}
-		payload := firstServiceDataHex(props)
-		if payload == "" {
+		payloads := serviceDataPayloads(props)
+		if len(payloads) == 0 {
 			continue
 		}
-		decoded := decodeServiceData(payload)
+		var decoded bledecode.Reading
+		for _, payload := range payloads {
+			decoded.Merge(bledecode.DecodeServiceData(payload))
+		}
+		reading := readingFromDecoded(decoded)
 		rssi := floatPtr(float64(getInt16(props, "RSSI")))
 		if getVariant(props, "RSSI") == nil {
 			rssi = nil
 		}
-		decoded.TS = now
-		decoded.SensorMAC = target.MAC
-		decoded.RSSI = rssi
-		readings = append(readings, decoded)
+		reading.TS = now
+		reading.SensorMAC = target.MAC
+		reading.RSSI = rssi
+		readings = append(readings, reading)
 	}
 	return readings, nil
 }
@@ -445,28 +453,14 @@ func getInt16(props map[string]dbus.Variant, key string) int16 {
 	}
 }
 
-func firstServiceDataHex(props map[string]dbus.Variant) string {
+func serviceDataPayloads(props map[string]dbus.Variant) [][]byte {
 	value := getVariant(props, "ServiceData")
 	if value == nil {
-		return ""
+		return nil
 	}
 	serviceData, ok := value.Value().(map[string]dbus.Variant)
 	if !ok {
-		return ""
-	}
-
-	preferred := []string{
-		"0000fe6a-0000-1000-8000-00805f9b34fb",
-		"0000ffe1-0000-1000-8000-00805f9b34fb",
-		"0000feaa-0000-1000-8000-00805f9b34fb",
-	}
-	for _, key := range preferred {
-		if value, ok := serviceData[key]; ok {
-			bytes, ok := value.Value().([]byte)
-			if ok && len(bytes) > 0 {
-				return hex.EncodeToString(bytes)
-			}
-		}
+		return nil
 	}
 
 	keys := make([]string, 0, len(serviceData))
@@ -474,75 +468,28 @@ func firstServiceDataHex(props map[string]dbus.Variant) string {
 		keys = append(keys, key)
 	}
 	sort.Strings(keys)
+	payloads := make([][]byte, 0, len(keys))
 	for _, key := range keys {
-		bytes, ok := serviceData[key].Value().([]byte)
-		if ok && len(bytes) > 0 {
-			return hex.EncodeToString(bytes)
+		payload, ok := serviceData[key].Value().([]byte)
+		if ok && len(payload) > 0 {
+			payloads = append(payloads, payload)
 		}
 	}
-	return ""
+	return payloads
 }
 
-func decodeServiceData(payloadHex string) reading {
-	data, err := hex.DecodeString(payloadHex)
-	if err != nil {
-		return reading{}
+func readingFromDecoded(decoded bledecode.Reading) reading {
+	return reading{
+		TemperatureC:        decoded.TemperatureC,
+		HumidityPercent:     decoded.HumidityPercent,
+		BatteryPercent:      decoded.BatteryPercent,
+		PressureHPa:         decoded.PressureHPa,
+		CO2PPM:              decoded.CO2PPM,
+		Lux:                 decoded.Lux,
+		ETVOC:               decoded.ETVOC,
+		SoilMoisturePercent: decoded.SoilMoisturePercent,
+		ConductivityUSCM:    decoded.ConductivityUSCM,
 	}
-	r := reading{}
-
-	if len(data) >= 6 && data[0] == 0xa1 && data[1] == 0x01 {
-		r.BatteryPercent = floatPtr(float64(data[2]))
-		tempRaw := int8(data[3])
-		r.TemperatureC = floatPtr(float64(tempRaw))
-		humidity := float64(data[5])
-		if humidity <= 100 {
-			r.HumidityPercent = floatPtr(humidity)
-		}
-	}
-
-	if len(data) >= 5 && data[0] == 0x02 && data[1] == 0x80 && data[2] == 0x02 {
-		var candidates []float64
-		for _, value := range data[3:5] {
-			if value <= 100 {
-				candidates = append(candidates, float64(value))
-			}
-		}
-		if len(candidates) > 0 {
-			r.BatteryPercent = floatPtr(max(candidates))
-		}
-	}
-
-	if idx := indexMarker(data, []byte{0x03, 0x13}); idx >= 0 && idx+4 <= len(data) {
-		tempRaw := int16(uint16(data[idx+2]) | uint16(data[idx+3])<<8)
-		r.TemperatureC = floatPtr(round(float64(tempRaw)/256.0, 2))
-	}
-	if idx := indexMarker(data, []byte{0x02, 0x12}); idx >= 0 && idx+3 <= len(data) {
-		humidity := float64(data[idx+2])
-		if humidity <= 100 {
-			r.HumidityPercent = floatPtr(humidity)
-		}
-	}
-
-	if len(data) >= 24 && data[0] == 0x03 && data[1] == 0x05 && data[2] == 0x17 {
-		bits := uint32(data[3]) | uint32(data[4])<<8 | uint32(data[5])<<16 | uint32(data[6])<<24
-		r.PressureHPa = floatPtr(round(float64(math.Float32frombits(bits)), 2))
-
-		if idx := indexMarker(data, []byte{0x04, 0x1f}); idx >= 0 && idx+5 <= len(data) {
-			subtype := data[idx+2]
-			value := float64(uint16(data[idx+3]) | uint16(data[idx+4])<<8)
-			switch subtype {
-			case 0x07:
-				r.CO2PPM = floatPtr(value)
-			case 0x08:
-				r.ETVOC = floatPtr(value)
-			}
-		}
-		if idx := indexMarker(data, []byte{0x03, 0x20}); idx >= 0 && idx+4 <= len(data) {
-			r.Lux = floatPtr(float64(uint16(data[idx+2]) | uint16(data[idx+3])<<8))
-		}
-	}
-
-	return r
 }
 
 func sanitizeReading(r reading) reading {
@@ -554,6 +501,8 @@ func sanitizeReading(r reading) reading {
 	r.CO2PPM = sanitizeRange(r.CO2PPM, 0, 10000)
 	r.Lux = sanitizeRange(r.Lux, 0, 65534)
 	r.ETVOC = sanitizeRange(r.ETVOC, 0, 60000)
+	r.SoilMoisturePercent = sanitizeRange(r.SoilMoisturePercent, 0, 100)
+	r.ConductivityUSCM = sanitizeRange(r.ConductivityUSCM, 0, 10000)
 	return r
 }
 
@@ -562,22 +511,6 @@ func sanitizeRange(value *float64, minValue float64, maxValue float64) *float64 
 		return nil
 	}
 	return value
-}
-
-func indexMarker(data []byte, marker []byte) int {
-	for i := 0; i+len(marker) <= len(data); i++ {
-		match := true
-		for j := range marker {
-			if data[i+j] != marker[j] {
-				match = false
-				break
-			}
-		}
-		if match {
-			return i
-		}
-	}
-	return -1
 }
 
 func (c *collector) add(r reading) {
@@ -606,11 +539,13 @@ func (c *collector) add(r reading) {
 	appendPtr(&agg.CO2PPM, r.CO2PPM)
 	appendPtr(&agg.Lux, r.Lux)
 	appendPtr(&agg.ETVOC, r.ETVOC)
+	appendPtr(&agg.SoilMoisturePercent, r.SoilMoisturePercent)
+	appendPtr(&agg.ConductivityUSCM, r.ConductivityUSCM)
 }
 
 func readingKey(r reading) string {
 	return fmt.Sprintf(
-		"rssi=%s|t=%s|h=%s|b=%s|p=%s|co2=%s|lux=%s|etvoc=%s",
+		"rssi=%s|t=%s|h=%s|b=%s|p=%s|co2=%s|lux=%s|etvoc=%s|soil=%s|conductivity=%s",
 		ptrKey(r.RSSI),
 		ptrKey(r.TemperatureC),
 		ptrKey(r.HumidityPercent),
@@ -619,6 +554,8 @@ func readingKey(r reading) string {
 		ptrKey(r.CO2PPM),
 		ptrKey(r.Lux),
 		ptrKey(r.ETVOC),
+		ptrKey(r.SoilMoisturePercent),
+		ptrKey(r.ConductivityUSCM),
 	)
 }
 
@@ -678,8 +615,11 @@ func (c *collector) flush(ctx context.Context, agg *aggregate) (bool, error) {
 	co2 := c.filterMetric(agg.SensorMAC, "co2_ppm", agg.Window, nullableMedianFloat(agg.CO2PPM))
 	lux := nullableMedianFloat(agg.Lux)
 	etvoc := c.filterMetric(agg.SensorMAC, "etvoc", agg.Window, nullableMedianFloat(agg.ETVOC))
+	soilMoisture := nullableMedianFloat(agg.SoilMoisturePercent)
+	conductivity := nullableMedianFloat(agg.ConductivityUSCM)
 	if temperature == nil && humidity == nil && battery == nil && rssi == nil &&
-		pressure == nil && co2 == nil && lux == nil && etvoc == nil {
+		pressure == nil && co2 == nil && lux == nil && etvoc == nil &&
+		soilMoisture == nil && conductivity == nil {
 		return false, nil
 	}
 	_, err := sensorstore.UpsertMinute(ctx, c.db, sensor.Reading{
@@ -687,6 +627,7 @@ func (c *collector) flush(ctx context.Context, agg *aggregate) (bool, error) {
 		TemperatureC: temperature, HumidityPercent: humidity,
 		BatteryPercent: battery, RSSI: rssi, PressureHPa: pressure,
 		CO2PPM: co2, Lux: lux, ETVOC: etvoc,
+		SoilMoisturePercent: soilMoisture, ConductivityUSCM: conductivity,
 	})
 	if err != nil {
 		return false, fmt.Errorf("insert %s %s: %w", agg.SensorMAC, agg.Window.Format(time.RFC3339), err)
@@ -748,7 +689,9 @@ func (agg *aggregate) empty() bool {
 		len(agg.PressureHPa) == 0 &&
 		len(agg.CO2PPM) == 0 &&
 		len(agg.Lux) == 0 &&
-		len(agg.ETVOC) == 0
+		len(agg.ETVOC) == 0 &&
+		len(agg.SoilMoisturePercent) == 0 &&
+		len(agg.ConductivityUSCM) == 0
 }
 
 func ensureDevices(ctx context.Context, db *pgx.Conn, targets map[string]targetDevice) error {
@@ -789,21 +732,6 @@ func median(values []float64) float64 {
 
 func isFinite(value float64) bool {
 	return !math.IsNaN(value) && !math.IsInf(value, 0)
-}
-
-func max(values []float64) float64 {
-	result := values[0]
-	for _, value := range values[1:] {
-		if value > result {
-			result = value
-		}
-	}
-	return result
-}
-
-func round(value float64, places int) float64 {
-	factor := math.Pow10(places)
-	return math.Round(value*factor) / factor
 }
 
 func floatPtr(value float64) *float64 {
